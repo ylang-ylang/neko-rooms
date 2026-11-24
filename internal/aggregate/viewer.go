@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/gorilla/websocket"
+	"github.com/rs/zerolog/log"
 )
 
 const authTimeout = 5 * time.Second
@@ -201,6 +202,7 @@ func (g *Gateway) stream(w http.ResponseWriter, r *http.Request, name string) {
 			v.stop(websocket.ClosePolicyViolation, "native room rejected viewer connection")
 			return
 		}
+		traceNative("receive", message)
 		if message.Event == "system/heartbeat" {
 			if v.sendNative("client/heartbeat", nil) != nil {
 				return
@@ -222,7 +224,10 @@ func (g *Gateway) stream(w http.ResponseWriter, r *http.Request, name string) {
 	_ = native.SetReadDeadline(time.Time{})
 	v.peer, err = g.factory.NewPeer(v.ctx, PeerCallbacks{
 		Signal: v.sendNative, Ready: v.mediaReady, Media: v.media, Data: v.cursor,
-		Fail: func(error) { v.stop(websocket.CloseTryAgainLater, "private media stream failed") },
+		Fail: func(err error) {
+			log.Error().Err(err).Str("module", "aggregate").Msg("private media peer failed")
+			v.stop(websocket.CloseTryAgainLater, "private media stream failed")
+		},
 	})
 	if err != nil || v.peer == nil {
 		v.stop(websocket.CloseTryAgainLater, "private media adapter unavailable")
@@ -240,7 +245,9 @@ func (g *Gateway) stream(w http.ResponseWriter, r *http.Request, name string) {
 			v.stop(websocket.CloseGoingAway, "native room disconnected")
 			return
 		}
+		traceNative("receive", message)
 		if err := v.handleNative(message); err != nil {
+			log.Error().Err(err).Str("module", "aggregate").Str("event", message.Event).Msg("private native event failed")
 			return
 		}
 	}
@@ -285,6 +292,7 @@ func (v *viewer) writeNative() {
 				continue
 			}
 			_ = v.native.SetWriteDeadline(time.Now().Add(time.Second))
+			traceNative("send", message)
 			if v.native.WriteJSON(message) != nil {
 				v.stop(websocket.CloseGoingAway, "native signaling write failed")
 			}
