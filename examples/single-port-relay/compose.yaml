@@ -1,0 +1,101 @@
+# Docker Compose >= 2.30: manager.env is literal/raw, not interpolated dotenv.
+# Rooms are created by Manager, not by this Compose project.
+services:
+  gateway:
+    image: nginx:1.30.7-alpine@sha256:caf4e1e032a20f9c3c5e28fc7f25ffd768ad8677b4975c54193075997b3a97e3
+    restart: unless-stopped
+    entrypoint: [nginx]
+    command: [-g, "daemon off;"]
+    ports:
+      - "${PUBLIC_BIND_IP:?run demo.py configure}:${PUBLIC_PORT:?run demo.py configure}:443/tcp"
+    volumes:
+      - type: bind
+        source: ${RELAY_STATE_DIR:?run demo.py configure}/nginx.conf
+        target: /etc/nginx/nginx.conf
+        read_only: true
+        bind: {create_host_path: false}
+      - type: bind
+        source: ${TLS_CERT_FILE:?run demo.py configure}
+        target: /run/relay/tls.crt
+        read_only: true
+        bind: {create_host_path: false}
+      - type: bind
+        source: ${TLS_KEY_FILE:?run demo.py configure}
+        target: /run/relay/tls.key
+        read_only: true
+        bind: {create_host_path: false}
+    read_only: true
+    tmpfs: [/tmp, /var/cache/nginx]
+    cap_drop: [ALL]
+    # Root master must read operator-owned 0600 bind files before dropping UID.
+    cap_add: [NET_BIND_SERVICE, SETUID, SETGID, CHOWN, DAC_OVERRIDE]
+    security_opt: [no-new-privileges:true]
+    networks: [rooms]
+
+  turn:
+    image: coturn/coturn:4.6.3@sha256:71c3c990283385567f11794ee692e3a47b66fd9b0bb39e42afbe776e331dd888
+    restart: unless-stopped
+    # No image entrypoint public-IP detection or shell eval.
+    entrypoint: [turnserver]
+    command: [-c, /run/relay/turnserver.conf]
+    user: "0:0"
+    volumes:
+      - type: bind
+        source: ${RELAY_STATE_DIR:?run demo.py configure}/turnserver.conf
+        target: /run/relay/turnserver.conf
+        read_only: true
+        bind: {create_host_path: false}
+    read_only: true
+    tmpfs: [/tmp]
+    cap_drop: [ALL]
+    cap_add: [DAC_OVERRIDE, NET_BIND_SERVICE]
+    security_opt: [no-new-privileges:true]
+    networks:
+      rooms:
+        ipv4_address: ${TURN_PRIVATE_IP:?run demo.py configure}
+    # No host ports: even the allocation pool stays on the private bridge.
+
+  neko-rooms:
+    image: ${MANAGER_IMAGE:?build this repository and supply its local image tag}
+    pull_policy: never
+    restart: unless-stopped
+    env_file:
+      - path: ${RELAY_STATE_DIR:?run demo.py configure}/manager.env
+        format: raw
+    environment:
+      NEKO_ROOMS_BIND: :8080
+      NEKO_ROOMS_ADMIN_STATIC: /var/www
+      NEKO_ROOMS_ADMIN_PATH_PREFIX: /manage
+      NEKO_ROOMS_ADMIN_AUTH_MODE: form
+      NEKO_ROOMS_PROXY: "true"
+      NEKO_ROOMS_TRAEFIK_ENABLED: "false"
+      # Native Neko UI + WebRTC, NOT Manager's HTTP/MSE aggregation mode.
+      NEKO_ROOMS_NETWORK_MODE: relay
+      NEKO_ROOMS_MUX: "true"
+      NEKO_ROOMS_EPR: 59000-59999
+      NEKO_ROOMS_NAT1TO1: ""
+      NEKO_ROOMS_PATH_PREFIX: /room/
+      NEKO_ROOMS_INSTANCE_NAME: ${INSTANCE_NAME:?run demo.py configure}
+      NEKO_ROOMS_INSTANCE_NETWORK: ${ROOM_NETWORK:?run demo.py configure}
+      NEKO_ROOMS_INSTANCE_URL: ${PUBLIC_ORIGIN:?run demo.py configure}/
+      NEKO_ROOMS_AGENT_PUBLIC_URL: ${PUBLIC_ORIGIN:?run demo.py configure}/rooms/
+      NEKO_ROOMS_NEKO_IMAGES: ${ROOM_IMAGE:?run demo.py configure}
+      NEKO_ROOMS_STORAGE_ENABLED: "true"
+      NEKO_ROOMS_STORAGE_INTERNAL: /data
+      NEKO_ROOMS_STORAGE_EXTERNAL: ${STORAGE_PATH:?run demo.py configure}
+    volumes:
+      - type: bind
+        source: ${DOCKER_SOCKET:?run demo.py configure}
+        target: /var/run/docker.sock
+        bind: {create_host_path: false}
+      - type: bind
+        source: ${STORAGE_PATH:?run demo.py configure}
+        target: /data
+        bind: {create_host_path: false}
+    networks: [rooms]
+    # Manager, CDP and every dynamically created room have no published ports.
+
+networks:
+  rooms:
+    external: true
+    name: ${ROOM_NETWORK:?supply an explicitly selected private Docker bridge}

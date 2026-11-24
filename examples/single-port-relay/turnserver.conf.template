@@ -1,0 +1,34 @@
+# Ordinary UDP allocations on the same PRIVATE bridge as native Neko rooms.
+# Only the gateway's private TCP upstream reaches this client listener.
+listening-port=3478
+listening-ip=@TURN_PRIVATE_IP@
+relay-ip=@TURN_PRIVATE_IP@
+min-port=@TURN_RELAY_MIN@
+max-port=@TURN_RELAY_MAX@
+no-udp
+no-tls
+no-dtls
+no-tcp-relay
+lt-cred-mech
+realm=@TURN_HOST@
+user=@TURN_USERNAME@:@TURN_PASSWORD@
+fingerprint
+stale-nonce=600
+no-cli
+no-multicast-peers
+no-rfc5780
+no-stun-backward-compatibility
+no-software-attribute
+# Coturn 4.6.3 allows these room peers over the deny-all baseline.
+denied-peer-ip=0.0.0.0-255.255.255.255
+denied-peer-ip=::-ffff:ffff:ffff:ffff:ffff:ffff:ffff:ffff
+allowed-peer-ip=@ROOM_PEER_RANGE@
+user-quota=100
+total-quota=100
+max-bps=12500000
+bps-capacity=125000000
+relay-threads=2
+pidfile=/tmp/turnserver.pid
+userdb=/tmp/turndb
+log-file=stdout
+simple-log

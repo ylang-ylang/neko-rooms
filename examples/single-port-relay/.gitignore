@@ -1,0 +1,14 @@
+# Private state is refused inside the checkout; also exclude accidental copies.
+.env
+*.pem
+*.key
+*.crt
+credentials.json
+manager.env
+compose.env
+nginx.conf
+turnserver.conf
+room-request.json
+.state/
+state/
+__pycache__/

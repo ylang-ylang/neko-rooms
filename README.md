@@ -110,6 +110,8 @@ Sign in to a room with its **existing native room username/password**, not owner
 
 **Current limits:** Neko API v3, native token sessions, **VP8 video + Opus audio** and browser WebM/MSE support are required. This receives full-desktop video/audio and forwards control through Neko's native ownership checks; microphone/webcam upload is unsupported. Codec changes fail visibly; resize or slow consumers close/reconnect with a fresh decoder rather than reuse stale media. The separate prototype measured **578–670 ms** optical latency at 1280×720/10fps; that is not a latency guarantee for this integrated release or higher-load NAS/WAN sessions. Product-path playback/input acceptance is a separate end-to-end check.
 
+For a fresh local setup with the **original Neko UI/WebRTC** and HTTPS + TURN/TLS on **one TCP port**, see the [single-port native relay example](./examples/single-port-relay/) (local development CA included).
+
 ## Optional two-listener TURN relay deployment
 
 For the relay-capable fork, use the [private-network relay example and operator workflow](./examples/relay/). It terminates HTTPS/UI/management/Agent WebSockets on TCP **443** and TURN/TLS media on TCP **5349** (both configurable), with ordinary TURN relay allocations confined to the private room Docker network—not a public UDP range moved to another server. Existing owner form login, temporary Agent Bearer keys, room image and Profile/Downloads storage contracts remain unchanged.
