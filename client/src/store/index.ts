@@ -14,11 +14,12 @@ import {
 } from '@/api/index'
 
 import { state, State } from './state'
+import { managerBasePath } from '@/auth'
 
 Vue.use(Vuex)
 
 const configuration = new Configuration({
-  basePath: (location.protocol + '//' + location.host + location.pathname).replace(/\/+$/, ''),
+  basePath: managerBasePath,
 })
 
 const configApi = new ConfigApi(configuration)

@@ -89,9 +89,12 @@ test('API uses management pathname, encoded stable names, exact payloads and no 
         }]))
       },
     }
-    const api = load('src/api/agent.ts', { axios: mock }, {
-      location: { origin: 'http://manager.test', pathname },
-    })
+    let interceptorInstalls = 0
+    const api = load('src/api/agent.ts', { axios: mock, '@/auth': {
+      managerBasePath: 'http://manager.test' + pathname.replace(/\/+$/, ''),
+      installManagerAuthInterceptor: () => { interceptorInstalls++ },
+    } })
+    assert.equal(interceptorInstalls, 1)
     assert.equal(await api.createAgentKey('stable /名', 3600, '  label  '), issued)
     assert.equal(await api.createAgentKey('stable /名', 900, '  '), issued)
     assert.deepEqual(await api.listAgentKeys('stable /名'), [metadata])
@@ -109,7 +112,7 @@ test('API uses management pathname, encoded stable names, exact payloads and no 
 test('API errors retain HTTP details or the network error message', () => {
   const api = load('src/api/agent.ts', { axios: {
     create: () => ({}), isAxiosError: error => Boolean(error.isAxiosError),
-  } })
+  }, '@/auth': { installManagerAuthInterceptor: () => undefined } })
   for (const data of ['room unavailable\n', { error: 'room unavailable' }, { message: 'room unavailable' }]) {
     assert.equal(api.agentErrorMessage({ isAxiosError: true, response: { status: 404, data } }),
       'HTTP 404：room unavailable')

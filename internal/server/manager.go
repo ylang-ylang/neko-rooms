@@ -3,9 +3,7 @@ package server
 import (
 	"context"
 	"errors"
-	"io"
 	"io/fs"
-	"net"
 	"net/http"
 	"os"
 	"path"
@@ -30,10 +28,16 @@ type ServerManagerCtx struct {
 	router *chi.Mux
 	server *http.Server
 	config *config.Server
+	auth   *adminAuth
 }
 
 func New(ApiManager types.ApiManager, roomConfig *config.Room, config *config.Server, proxyHandler http.Handler, agentHandler http.Handler) *ServerManagerCtx {
 	logger := log.With().Str("module", "server").Logger()
+	auth := newAdminAuth(config)
+	// Room/CDP dispatch must not receive owner cookies or cached form-mode
+	// Basic credentials, even when the legacy manager prefix is root.
+	proxyHandler = auth.withoutOwnerCredentials(proxyHandler)
+	agentHandler = auth.withoutOwnerCredentials(agentHandler)
 
 	router := chi.NewRouter()
 	router.Use(middleware.RequestID) // Create a request ID for each request
@@ -52,6 +56,10 @@ func New(ApiManager types.ApiManager, roomConfig *config.Room, config *config.Se
 		// for more ideas, see: https://developer.github.com/v3/#cross-origin-resource-sharing
 		router.Use(cors.Handler(cors.Options{
 			AllowOriginFunc: func(r *http.Request, origin string) bool {
+				if auth.mode == "form" && (auth.isAPIPath(r.URL.Path) || auth.isAuthPath(r.URL.Path) ||
+					(auth.prefix != "" && (r.URL.Path == auth.prefix || strings.HasPrefix(r.URL.Path, auth.root())))) {
+					return auth.sameOrigin(r, origin, false)
+				}
 				return true
 			},
 			AllowedMethods:   []string{"GET", "POST", "PUT", "DELETE", "OPTIONS"},
@@ -65,116 +73,10 @@ func New(ApiManager types.ApiManager, roomConfig *config.Room, config *config.Se
 	// admin page
 	//
 
-	protected := func(next http.Handler) http.Handler {
-		// if proxy auth is enabled
-		if config.Admin.ProxyAuth != "" {
-			return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-				req, err := http.NewRequest("GET", config.Admin.ProxyAuth, nil)
-				if err != nil {
-					logger.Err(err).Msg("proxy auth request `http.NewRequest` err")
-					http.Error(w, "proxy auth failed", http.StatusForbidden)
-					return
-				}
-
-				//
-				// copy headers
-				//
-
-				for k, vv := range r.Header {
-					for _, v := range vv {
-						req.Header.Add(k, v)
-					}
-				}
-
-				//
-				// add x-forwarded headers
-				//
-
-				if clientIP, _, err := net.SplitHostPort(req.RemoteAddr); err == nil {
-					req.Header.Add("X-Forwarded-For", clientIP)
-				}
-
-				if r.Method != "" {
-					req.Header.Add("X-Forwarded-Method", r.Method)
-				} else {
-					req.Header.Del("X-Forwarded-Method")
-				}
-
-				if r.TLS != nil {
-					req.Header.Add("X-Forwarded-Proto", "https")
-				} else {
-					req.Header.Add("X-Forwarded-Proto", "http")
-				}
-
-				if r.Host != "" {
-					req.Header.Add("X-Forwarded-Host", r.Host)
-				} else {
-					req.Header.Del("X-Forwarded-Host")
-				}
-
-				if r.URL.RequestURI() != "" {
-					req.Header.Add("X-Forwarded-Uri", r.URL.RequestURI())
-				} else {
-					req.Header.Del("X-Forwarded-Uri")
-				}
-
-				client := &http.Client{
-					CheckRedirect: func(req *http.Request, via []*http.Request) error {
-						return http.ErrUseLastResponse
-					},
-				}
-
-				res, err := client.Do(req)
-				if err != nil {
-					logger.Err(err).Msg("proxy auth request `client.Do` err")
-					http.Error(w, "proxy auth failed", http.StatusForbidden)
-					return
-				}
-				defer res.Body.Close()
-
-				if res.StatusCode < 200 || res.StatusCode >= 300 {
-					// copy headers
-					for k, vv := range res.Header {
-						for _, v := range vv {
-							w.Header().Add(k, v)
-						}
-					}
-
-					// copy status & body
-					w.WriteHeader(res.StatusCode)
-					_, err := io.Copy(w, res.Body)
-					if err != nil {
-						logger.Err(err).Msg("proxy auth request `io.Copy` err")
-					}
-					return
-				} else {
-					// discard body so that the connection can be reused
-					_, _ = io.Copy(io.Discard, res.Body)
-				}
-
-				next.ServeHTTP(w, r)
-			})
-		}
-
-		// if basic auth is enabled
-		if config.Admin.Username != "" && config.Admin.Password != "" {
-			return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-				user, pass, ok := r.BasicAuth()
-				if !ok || user != config.Admin.Username || pass != config.Admin.Password {
-					w.Header().Add("WWW-Authenticate", `Basic realm="neko-rooms admin"`)
-					w.WriteHeader(http.StatusUnauthorized)
-					return
-				}
-
-				next.ServeHTTP(w, r)
-			})
-		}
-
-		return next
-	}
+	protected := auth.protect
 
 	// DEPRECATED: admin should not be served from the same path as rooms
-	if config.Admin.PathPrefix == "/" {
+	if auth.prefix == "" {
 		// cache static file paths
 		staticFiles := map[string]struct{}{}
 		if config.Admin.Static != "" {
@@ -196,6 +98,12 @@ func New(ApiManager types.ApiManager, roomConfig *config.Room, config *config.Se
 			}
 
 			return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				// Authentication endpoints remain public even if a static file
+				// happens to share their name under the deprecated root prefix.
+				if auth.isAuthPath(r.URL.Path) {
+					next.ServeHTTP(w, r)
+					return
+				}
 				filePath := path.Join(config.Admin.Static, r.URL.Path)
 
 				// check if file exists to serve it
@@ -210,11 +118,18 @@ func New(ApiManager types.ApiManager, roomConfig *config.Room, config *config.Se
 				next.ServeHTTP(w, r)
 			})
 		})
+	}
 
+	// Register public auth endpoints before the protected UI catch-all.
+	auth.mount(router)
+	if auth.prefix == "" {
 		// serve protected API
 		router.With(protected).Route("/api", ApiManager.Mount)
 	} else {
-		router.With(protected).Route(config.Admin.PathPrefix+"/", func(r chi.Router) {
+		router.With(protected).Get(auth.prefix, func(w http.ResponseWriter, r *http.Request) {
+			http.Redirect(w, r, auth.root(), http.StatusSeeOther)
+		})
+		router.With(protected).Route(auth.root(), func(r chi.Router) {
 			// serve protected API
 			r.Route("/api", ApiManager.Mount)
 
@@ -272,6 +187,7 @@ func New(ApiManager types.ApiManager, roomConfig *config.Room, config *config.Se
 			Handler: router,
 		},
 		config: config,
+		auth:   auth,
 	}
 }
 

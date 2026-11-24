@@ -9,7 +9,7 @@ module.exports = defineConfig({
   devServer: {
     allowedHosts: "all",
     proxy: process.env.API_PROXY ? {
-      '^/api': {
+      '^/(api|auth)(/|$)': {
         target: process.env.API_PROXY,
         timeout: 0, // because of SSE
       },

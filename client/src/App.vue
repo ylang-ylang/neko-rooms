@@ -14,6 +14,11 @@
       <div>
         by <a href="https://m1k1o.net" style="text-decoration: none; color:white">m1k1o</a>
       </div>
+
+      <span v-if="auth.authenticated && auth.username" class="ml-4">{{ auth.username }}</span>
+      <form v-if="auth.mode === 'form'" :action="auth.logout_url" method="post" class="ml-4">
+        <v-btn type="submit" text>退出登录</v-btn>
+      </form>
     </v-app-bar>
 
     <v-main>
@@ -36,8 +41,9 @@
 </template>
 
 <script lang="ts">
-import { Vue, Component } from 'vue-property-decorator'
+import { Vue, Component, Prop } from 'vue-property-decorator'
 import Home from './views/Home.vue'
+import { ManagerAuthStatus } from './auth'
 
 @Component({
   components: {
@@ -45,6 +51,8 @@ import Home from './views/Home.vue'
   }
 })
 export default class App extends Vue {
+  @Prop({ required: true }) readonly auth!: ManagerAuthStatus
+
   created() {
     this.$vuetify.theme.dark = true
   }

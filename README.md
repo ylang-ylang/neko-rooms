@@ -23,7 +23,7 @@ This fork adds temporary, per-room Chromium DevTools Protocol (CDP) access to th
 ### Setup
 
 - Use a Chromium room image with CDP enabled on loopback port **9222** and a room-side relay listening on **9223**, reachable from the manager on the room's Docker network. The manager connects to the current room container's `:9223`; it does **not** install that relay or enable CDP for you. Do not expose the unauthenticated relay publicly.
-- Protect management with the existing native admin username/password or proxy authentication. Set `NEKO_ROOMS_ADMIN_PATH_PREFIX=/manage`; the management UI is then at `/manage/`. Agent keys never grant management access.
+- Protect management with the existing admin username/password (form login by default) or proxy authentication. Set `NEKO_ROOMS_ADMIN_PATH_PREFIX=/manage`; the management UI is then at `/manage/`. Agent keys never grant management access.
 - Set the public CDP prefix, including the entire path before the room name:
 
   ```yaml
@@ -32,6 +32,30 @@ This fork adds temporary, per-room Chromium DevTools Protocol (CDP) access to th
 
   This is a **full prefix**, not just an origin. For an external `/cdp/rooms/` prefix, use `https://cdp.example.com/cdp/rooms/` and have the reverse proxy map it to the manager's `/rooms/` routes. Without this variable, URLs are inferred from the request and forwarded host/protocol headers, with `/rooms/` as the path. Configure trusted proxy headers correctly or set the explicit prefix.
 - Route public CDP HTTP and WebSocket traffic directly to the manager, preserving `Authorization: Bearer …` and WebSocket upgrade headers. Do not put a Basic-auth/login-page challenge in front of `/rooms/`; management remains separately protected.
+
+### Management login
+
+Open `/manage/` and sign in with the **same** `NEKO_ROOMS_ADMIN_USERNAME` / `NEKO_ROOMS_ADMIN_PASSWORD` already configured (`admin` is the default username). Local credentials default to `NEKO_ROOMS_ADMIN_AUTH_MODE=form`: a normal HTML form submits by POST, with named username/password fields and `autocomplete="username"` / `autocomplete="current-password"` for password managers. Form mode never accepts or challenges with HTTP Basic. Set `NEKO_ROOMS_ADMIN_AUTH_MODE=basic` explicitly for the legacy browser prompt; `NEKO_ROOMS_ADMIN_PROXY_AUTH` still takes precedence. Without credentials or proxy auth, management remains unauthenticated.
+
+The host-only, HttpOnly, SameSite=Lax owner cookie lasts **7 days**; sessions live only in manager RAM. **Restarting the manager requires signing in again.** Use **退出登录** in the header to revoke the session; expired/revoked sessions return to the login page. HTTPS (or HTTPS forwarded by an explicitly trusted `NEKO_ROOMS_PROXY=true` proxy) adds the Secure cookie flag. `GET /manage/auth/status` returns `{mode, authenticated, username?, login_url, logout_url}` without exposing credentials or session tokens.
+
+Programmatic owner API clients must first POST the form and retain its cookie, not use an Agent Bearer key. Login, logout and all mutating owner API requests require an `Origin` (or `Referer`) matching the manager's scheme, host **and port**. For example, with `OWNER_USERNAME` and `OWNER_PASSWORD` set to the existing credentials:
+
+```sh
+ORIGIN=https://rooms.example.com
+MANAGER="$ORIGIN/manage"
+COOKIE_JAR=$(mktemp)
+trap 'rm -f "$COOKIE_JAR"' EXIT
+curl --fail --silent --show-error -c "$COOKIE_JAR" -o /dev/null \
+  -H "Origin: $ORIGIN" \
+  --data-urlencode "username=$OWNER_USERNAME" --data-urlencode "password=$OWNER_PASSWORD" \
+  --data-urlencode 'next=/manage/' "$MANAGER/auth/login"
+curl --fail --silent --show-error -b "$COOKIE_JAR" "$MANAGER/api/rooms"
+curl --fail --silent --show-error -b "$COOKIE_JAR" -c "$COOKIE_JAR" -o /dev/null \
+  -H "Origin: $ORIGIN" -X POST "$MANAGER/auth/logout"
+```
+
+Owner sessions, legacy CDP Basic credentials and Neko room-viewer passwords are separate credentials; none substitutes for the temporary Agent CDP Bearer key described below.
 
 ### Give an agent access
 

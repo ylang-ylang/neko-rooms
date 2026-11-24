@@ -1,5 +1,6 @@
 // Handwritten, typed companion to the generated API; uses the same management UI base.
 import axios from 'axios'
+import { installManagerAuthInterceptor, managerBasePath } from '@/auth'
 
 export interface AgentKey {
   key_id: string;
@@ -20,12 +21,12 @@ export interface IssuedAgentKey {
   prompt: string;
 }
 
-// Browser-cached BasicAuth handles these same-origin requests. Never set global auth headers.
+// Same-origin cookies (or browser-cached BasicAuth in basic mode); never set auth headers.
 const api = axios.create({ timeout: 15000 })
+installManagerAuthInterceptor(api)
 
 function roomKeysUrl(roomName: string): string {
-  const basePath = (location.origin + location.pathname).replace(/\/+$/, '')
-  return `${basePath}/api/agent/rooms/${encodeURIComponent(roomName)}/keys`
+  return `${managerBasePath}/api/agent/rooms/${encodeURIComponent(roomName)}/keys`
 }
 
 export async function createAgentKey(roomName: string, ttlSeconds: number, label: string): Promise<IssuedAgentKey> {

@@ -6,7 +6,8 @@
     "serve": "vue-cli-service serve",
     "build": "vue-cli-service build",
     "lint": "vue-cli-service lint src tests/*.cjs *.js .eslintrc.js",
-    "test:agent": "node --test tests/agent-access.test.cjs"
+    "test:agent": "node --test tests/agent-access.test.cjs",
+    "test:auth": "node --test tests/manager-auth.test.cjs"
   },
   "dependencies": {
     "axios": "^1.5.1",

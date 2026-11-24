@@ -2,11 +2,31 @@ openapi: 3.0.0
 info:
   title: Neko Rooms
   version: 1.0.0
+  description: |
+    Management paths below are relative to admin.path_prefix (for example /manage).
+    Configured local credentials use native HTML form login and an owner session by default:
+    NEKO_ROOMS_ADMIN_AUTH_MODE=form (CLI --admin.auth_mode=form), with the existing
+    NEKO_ROOMS_ADMIN_USERNAME and NEKO_ROOMS_ADMIN_PASSWORD. Explicit basic mode retains
+    legacy HTTP Basic; admin.proxy_auth still takes precedence. With no credentials,
+    intentionally unauthenticated management remains available. Partial credentials and
+    unknown authentication modes are rejected at startup.
+
+    Form-mode API requests without a valid session return 401, never a Basic challenge
+    or login HTML. Unsafe management methods and login/logout require an Origin or
+    Referer matching the request's scheme, host AND port; programmatic cookie-jar
+    clients must supply Origin. Reverse-proxy HTTPS headers are trusted only with
+    NEKO_ROOMS_PROXY=true. Owner sessions expire after seven days or manager restart,
+    and cannot authenticate Agent CDP. Agent Bearer keys cannot manage rooms or keys.
 servers:
   # Added by API Auto Mocking Plugin
   - description: SwaggerHub API Auto Mocking
     url: https://virtserver.swaggerhub.com/m1k1o/neko-rooms/1.0.0
+security:
+  - managerSession: []
+  - managerBasicAuth: []
 tags:
+  - name: auth
+    description: Public owner login and session endpoints
   - name: config
     description: config endpoints
   - name: rooms
@@ -14,6 +34,104 @@ tags:
   - name: agent
     description: Temporary per-room Agent access, protected by native management authentication
 paths:
+  /auth/status:
+    get:
+      tags: [auth]
+      summary: Read the effective management authentication mode and current login status
+      operationId: managerAuthStatus
+      security: []
+      description: Always returns public JSON without a password, session token or Basic challenge.
+      responses:
+        '200':
+          description: Authentication status (Cache-Control no-store)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ManagerAuthStatus'
+  /auth/login:
+    get:
+      tags: [auth]
+      summary: Display a password-manager-friendly native HTML login form
+      operationId: managerLoginForm
+      security: []
+      parameters:
+        - in: query
+          name: next
+          schema:
+            type: string
+          description: Optional local manager UI path; unsafe targets fall back to the manager root.
+      responses:
+        '200':
+          description: Standard HTML form with username and current-password autocomplete fields; no JavaScript required.
+          content:
+            text/html:
+              schema:
+                type: string
+        '303':
+          description: Already logged in, redirect to manager root.
+    post:
+      tags: [auth]
+      summary: Sign in using the existing configured owner credentials
+      operationId: managerLogin
+      security: []
+      description: |
+        Requires same-origin Origin or Referer. Ignores Authorization, including cached
+        Basic credentials. Creates a new opaque server-side session and revokes the
+        presented prior session. The host-only cookie is HttpOnly, SameSite=Lax and
+        scoped to admin.path_prefix; Secure is enabled only for TLS or trusted proxy HTTPS.
+      requestBody:
+        required: true
+        content:
+          application/x-www-form-urlencoded:
+            schema:
+              type: object
+              required: [username, password]
+              properties:
+                username:
+                  type: string
+                password:
+                  type: string
+                  format: password
+                next:
+                  type: string
+                  description: Only a canonical local manager UI path, never API/auth or an external URL.
+      responses:
+        '303':
+          description: Session cookie set; redirect to the safe next path or manager root.
+        '400':
+          description: Invalid or oversized form.
+        '401':
+          description: Ordinary HTML login error, without echoing the password or issuing a Basic challenge.
+        '403':
+          description: Missing or foreign Origin/Referer (including a different port on the same host).
+        '404':
+          description: Form login is not enabled in the current authentication mode.
+        '415':
+          description: Content-Type must be application/x-www-form-urlencoded.
+  /auth/logout:
+    post:
+      tags: [auth]
+      summary: Revoke the owner session and clear its cookie
+      operationId: managerLogout
+      security: []
+      description: |
+        Requires same-origin Origin or Referer. Idempotent for expired or revoked sessions.
+        Cached Basic credentials cannot silently restore a form-mode session after logout.
+      responses:
+        '303':
+          description: Session revoked and cookie expired; redirect to the login form.
+        '403':
+          description: Missing or foreign Origin/Referer.
+        '404':
+          description: Form login is not enabled in the current authentication mode.
+    get:
+      tags: [auth]
+      summary: GET cannot log out an owner
+      operationId: managerLogoutGetRejected
+      security: []
+      responses:
+        '405':
+          description: Use POST; the session is unchanged.
   /api/config/rooms:
     get:
       tags:
@@ -47,6 +165,7 @@ paths:
         Manager restart invalidates all temporary keys. No room or management passwords are included.
       operationId: agentKeyCreate
       security:
+        - managerSession: []
         - managerBasicAuth: []
       requestBody:
         required: true
@@ -75,6 +194,7 @@ paths:
       summary: List active Agent keys for a room, without raw keys or prompts
       operationId: agentKeysList
       security:
+        - managerSession: []
         - managerBasicAuth: []
       responses:
         '200':
@@ -102,6 +222,7 @@ paths:
       summary: Revoke an Agent key and close its active sessions
       operationId: agentKeyRevoke
       security:
+        - managerSession: []
         - managerBasicAuth: []
       parameters:
         - in: path
@@ -487,11 +608,34 @@ paths:
 
 components:
   securitySchemes:
+    managerSession:
+      type: apiKey
+      in: cookie
+      name: neko_rooms_admin_session
+      description: Opaque owner session issued by native form login; unsafe methods also require same-origin Origin/Referer.
     managerBasicAuth:
       type: http
       scheme: basic
-      description: Native management authentication, using the browser's existing credential cache
+      description: Legacy management authentication, only when admin.auth_mode=basic (never accepted in form mode).
   schemas:
+    ManagerAuthStatus:
+      type: object
+      required: [mode, authenticated, login_url, logout_url]
+      properties:
+        mode:
+          type: string
+          enum: [form, basic, proxy, none]
+        authenticated:
+          type: boolean
+        username:
+          type: string
+          description: Present only for an authenticated local owner.
+        login_url:
+          type: string
+          example: /manage/auth/login
+        logout_url:
+          type: string
+          example: /manage/auth/logout
     AgentKeyCreate:
       type: object
       required: [ttl_seconds]

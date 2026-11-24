@@ -1,6 +1,7 @@
 package config
 
 import (
+	"fmt"
 	"path"
 
 	"github.com/spf13/cobra"
@@ -11,8 +12,31 @@ type Admin struct {
 	Static     string
 	PathPrefix string
 	ProxyAuth  string
+	AuthMode   string
 	Username   string
 	Password   string
+}
+
+// AuthenticationMode resolves the effective manager authentication mode. The
+// empty struct value retains Basic auth for existing Go callers; configured
+// servers default to form auth instead. Proxy authentication takes precedence.
+func (a Admin) AuthenticationMode() (string, error) {
+	if a.AuthMode != "" && a.AuthMode != "form" && a.AuthMode != "basic" {
+		return "", fmt.Errorf("unknown admin.auth_mode %q: expected form or basic", a.AuthMode)
+	}
+	if a.ProxyAuth != "" {
+		return "proxy", nil
+	}
+	if a.Username == "" && a.Password == "" {
+		return "none", nil
+	}
+	if a.Username == "" || a.Password == "" {
+		return "", fmt.Errorf("admin.username and admin.password must both be configured, or both omitted")
+	}
+	if a.AuthMode == "form" {
+		return "form", nil
+	}
+	return "basic", nil
 }
 
 type Server struct {
@@ -86,6 +110,11 @@ func (Server) Init(cmd *cobra.Command) error {
 		return err
 	}
 
+	cmd.PersistentFlags().String("admin.auth_mode", "form", "admin authentication: form (session login) or basic (legacy browser prompt); proxy_auth takes precedence")
+	if err := viper.BindPFlag("admin.auth_mode", cmd.PersistentFlags().Lookup("admin.auth_mode")); err != nil {
+		return err
+	}
+
 	cmd.PersistentFlags().String("admin.username", "admin", "require auth: admin username")
 	if err := viper.BindPFlag("admin.username", cmd.PersistentFlags().Lookup("admin.username")); err != nil {
 		return err
@@ -112,6 +141,19 @@ func (s *Server) Set() {
 	s.Admin.Static = viper.GetString("admin.static")
 	s.Admin.PathPrefix = path.Join("/", path.Clean(viper.GetString("admin.path_prefix")))
 	s.Admin.ProxyAuth = viper.GetString("admin.proxy_auth")
+	s.Admin.AuthMode = viper.GetString("admin.auth_mode")
+	if s.Admin.AuthMode == "" {
+		s.Admin.AuthMode = "form"
+	}
 	s.Admin.Username = viper.GetString("admin.username")
 	s.Admin.Password = viper.GetString("admin.password")
+	// The implicit username=admin flag default has historically allowed an
+	// unconfigured server to run without authentication. Do not mistake it for
+	// explicitly configured, incomplete credentials.
+	if s.Admin.Password == "" && !viper.IsSet("admin.username") {
+		s.Admin.Username = ""
+	}
+	if _, err := s.Admin.AuthenticationMode(); err != nil {
+		panic(fmt.Errorf("invalid admin authentication configuration: %w", err))
+	}
 }
