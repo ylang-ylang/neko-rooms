@@ -17,6 +17,7 @@ import (
 
 	"github.com/docker/cli/opts"
 	dockerContainer "github.com/docker/docker/api/types/container"
+	dockerImage "github.com/docker/docker/api/types/image"
 	dockerMount "github.com/docker/docker/api/types/mount"
 	dockerNetwork "github.com/docker/docker/api/types/network"
 	dockerStrslice "github.com/docker/docker/api/types/strslice"
@@ -61,6 +62,7 @@ type RoomManagerCtx struct {
 
 func (manager *RoomManagerCtx) Config() types.RoomsConfig {
 	return types.RoomsConfig{
+		NetworkMode:    manager.config.EffectiveNetworkMode(),
 		Connections:    manager.config.EprMax - manager.config.EprMin + 1,
 		NekoImages:     manager.config.NekoImages,
 		StorageEnabled: manager.config.StorageEnabled,
@@ -127,6 +129,12 @@ func (manager *RoomManagerCtx) ExportAsDockerCompose(ctx context.Context) ([]byt
 		service["container_name"] = containerName
 		service["hostname"] = containerJson.Config.Hostname
 		service["restart"] = containerJson.HostConfig.RestartPolicy.Name
+		if labels.NetworkMode == config.NetworkModeRelay {
+			// The adapter is part of relay networking, not the image's default
+			// command. Preserve it through Compose's own $ interpolation.
+			service["entrypoint"] = composeLiteralStrings(containerJson.Config.Entrypoint)
+			service["command"] = composeLiteralStrings(containerJson.Config.Cmd)
+		}
 
 		// privileged
 		if containerJson.HostConfig.Privileged {
@@ -203,7 +211,11 @@ func (manager *RoomManagerCtx) ExportAsDockerCompose(ctx context.Context) ([]byt
 
 		// environment variables
 		if len(containerJson.Config.Env) > 0 {
-			service["environment"] = containerJson.Config.Env
+			if labels.NetworkMode == config.NetworkModeRelay {
+				service["environment"] = composeLiteralStrings(containerJson.Config.Env)
+			} else {
+				service["environment"] = containerJson.Config.Env
+			}
 		}
 
 		// volumes
@@ -241,28 +253,40 @@ func (manager *RoomManagerCtx) ExportAsDockerCompose(ctx context.Context) ([]byt
 	return yaml.Marshal(dockerCompose)
 }
 
-func (manager *RoomManagerCtx) Create(ctx context.Context, settings types.RoomSettings) (string, error) {
+// ValidateSettings is also used before an explicit recreation removes the old
+// container, so an unsupported network/API combination cannot destroy it first.
+func (manager *RoomManagerCtx) ValidateSettings(ctx context.Context, settings types.RoomSettings) error {
+	_, _, err := manager.prepareSettings(ctx, settings)
+	return err
+}
+
+func (manager *RoomManagerCtx) prepareSettings(ctx context.Context, settings types.RoomSettings) (types.RoomSettings, *dockerImage.InspectResponse, error) {
+	if err := manager.config.ValidateNetworking(); err != nil {
+		return settings, nil, err
+	}
 	if settings.Name != "" && !dockerNames.RestrictedNamePattern.MatchString(settings.Name) {
-		return "", fmt.Errorf("invalid container name, must match %s", dockerNames.RestrictedNameChars)
+		return settings, nil, fmt.Errorf("invalid container name, must match %s", dockerNames.RestrictedNameChars)
 	}
 
 	if !slices.Contains(manager.config.NekoImages, settings.NekoImage) {
-		return "", fmt.Errorf("invalid neko image")
+		return settings, nil, fmt.Errorf("invalid neko image")
 	}
 
+	var image *dockerImage.InspectResponse
 	// if api version is not set, try to detect it
 	if settings.ApiVersion == 0 {
 		inspect, err := manager.client.ImageInspect(ctx, settings.NekoImage)
 		if err != nil {
-			return "", err
+			return settings, nil, err
 		}
+		image = &inspect
 
 		// based on image label (preferred)
 		if val, ok := inspect.Config.Labels["net.m1k1o.neko.api-version"]; ok {
 			var err error
 			settings.ApiVersion, err = strconv.Atoi(val)
 			if err != nil {
-				return "", err
+				return settings, nil, err
 			}
 		} else
 
@@ -284,6 +308,33 @@ func (manager *RoomManagerCtx) Create(ctx context.Context, settings types.RoomSe
 			log.Warn().Str("image", settings.NekoImage).Msg("unable to detect api version, fallback to v2")
 			settings.ApiVersion = 2
 		}
+	}
+
+	if err := settings.ValidateNetworkPolicy(manager.config); err != nil {
+		return settings, nil, err
+	}
+	if settings.ApiVersion != 2 && settings.ApiVersion != 3 {
+		return settings, nil, fmt.Errorf("unsupported API version: %d", settings.ApiVersion)
+	}
+	if manager.config.EffectiveNetworkMode() == config.NetworkModeRelay {
+		if image == nil {
+			inspect, err := manager.client.ImageInspect(ctx, settings.NekoImage)
+			if err != nil {
+				return settings, nil, err
+			}
+			image = &inspect
+		}
+		if err := validateRelaySettings(settings, image); err != nil {
+			return settings, nil, err
+		}
+	}
+	return settings, image, nil
+}
+
+func (manager *RoomManagerCtx) Create(ctx context.Context, settings types.RoomSettings) (string, error) {
+	settings, image, err := manager.prepareSettings(ctx, settings)
+	if err != nil {
+		return "", err
 	}
 
 	// TODO: Check if path name exists.
@@ -312,22 +363,26 @@ func (manager *RoomManagerCtx) Create(ctx context.Context, settings types.RoomSe
 		return "", err
 	}
 
+	// The allocated range is still private per-room capacity in relay mode;
+	// only direct mode publishes it on the Docker host.
 	portBindings := nat.PortMap{}
-	for port := epr.Min; port <= epr.Max; port++ {
-		portBindings[nat.Port(fmt.Sprintf("%d/udp", port))] = []nat.PortBinding{
-			{
-				HostIP:   "0.0.0.0",
-				HostPort: fmt.Sprintf("%d", port),
-			},
-		}
-
-		// expose TCP port as well when using mux
-		if manager.config.Mux {
-			portBindings[nat.Port(fmt.Sprintf("%d/tcp", port))] = []nat.PortBinding{
+	if manager.config.EffectiveNetworkMode() == config.NetworkModeDirect {
+		for port := epr.Min; port <= epr.Max; port++ {
+			portBindings[nat.Port(fmt.Sprintf("%d/udp", port))] = []nat.PortBinding{
 				{
 					HostIP:   "0.0.0.0",
 					HostPort: fmt.Sprintf("%d", port),
 				},
+			}
+
+			// expose TCP port as well when using mux
+			if manager.config.Mux {
+				portBindings[nat.Port(fmt.Sprintf("%d/tcp", port))] = []nat.PortBinding{
+					{
+						HostIP:   "0.0.0.0",
+						HostPort: fmt.Sprintf("%d", port),
+					},
+				}
 			}
 		}
 	}
@@ -357,8 +412,9 @@ func (manager *RoomManagerCtx) Create(ctx context.Context, settings types.RoomSe
 		Mux:  manager.config.Mux,
 		Epr:  epr,
 
-		NekoImage:  settings.NekoImage,
-		ApiVersion: settings.ApiVersion,
+		NekoImage:   settings.NekoImage,
+		ApiVersion:  settings.ApiVersion,
+		NetworkMode: manager.config.EffectiveNetworkMode(),
 
 		BrowserPolicy: browserPolicyLabels,
 		UserDefined:   settings.Labels,
@@ -427,6 +483,9 @@ func (manager *RoomManagerCtx) Create(ctx context.Context, settings types.RoomSe
 		}
 
 		key, val := v[0], v[1]
+		if key == networkModeLabel {
+			continue // this label must describe the actual generated network policy
+		}
 		labels[key] = val
 	}
 
@@ -634,6 +693,10 @@ func (manager *RoomManagerCtx) Create(ctx context.Context, settings types.RoomSe
 		Image: settings.NekoImage,
 		// List of labels set to this container
 		Labels: labels,
+	}
+
+	if manager.config.EffectiveNetworkMode() == "relay" {
+		config.Entrypoint, config.Cmd = relayContainerCommand(image)
 	}
 
 	hostConfig := &dockerContainer.HostConfig{
@@ -872,6 +935,7 @@ func (manager *RoomManagerCtx) GetSettings(ctx context.Context, id string) (*typ
 		ApiVersion:     labels.ApiVersion,
 		Name:           labels.Name,
 		NekoImage:      labels.NekoImage,
+		NetworkMode:    labels.NetworkMode,
 		MaxConnections: labels.Epr.Max - labels.Epr.Min + 1,
 		Labels:         labels.UserDefined,
 		Mounts:         mounts,

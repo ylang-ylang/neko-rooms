@@ -3,12 +3,14 @@ package types
 import (
 	"context"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/m1k1o/neko-rooms/internal/config"
 )
 
 type RoomsConfig struct {
+	NetworkMode    string   `json:"network_mode"`
 	Connections    uint16   `json:"connections"`
 	NekoImages     []string `json:"neko_images"`
 	StorageEnabled bool     `json:"storage_enabled"`
@@ -20,6 +22,7 @@ type RoomEntry struct {
 	URL            string            `json:"url"`
 	Name           string            `json:"name"`
 	NekoImage      string            `json:"neko_image"`
+	NetworkMode    string            `json:"network_mode"`
 	IsOutdated     bool              `json:"is_outdated"`
 	MaxConnections uint16            `json:"max_connections"` // 0 when using mux
 	Running        bool              `json:"running"`
@@ -61,6 +64,7 @@ type RoomSettings struct {
 
 	Name           string `json:"name"`
 	NekoImage      string `json:"neko_image"`
+	NetworkMode    string `json:"network_mode"`    // read-only; creation uses the manager's policy
 	MaxConnections uint16 `json:"max_connections"` // 0 when using mux
 
 	ControlProtection bool `json:"control_protection"`
@@ -92,12 +96,32 @@ type RoomSettings struct {
 	BrowserPolicy *BrowserPolicy `json:"browser_policy,omitempty"`
 }
 
+func (settings *RoomSettings) ValidateNetworkPolicy(cfg *config.Room) error {
+	if err := cfg.ValidateNetworking(); err != nil {
+		return err
+	}
+	if cfg.EffectiveNetworkMode() == config.NetworkModeRelay {
+		if settings.ApiVersion != 3 {
+			return fmt.Errorf("relay networking requires Neko API version 3")
+		}
+		for key := range settings.Envs {
+			if name, _, _ := strings.Cut(key, "="); name == "NEKO_CONFIG" {
+				return fmt.Errorf("relay networking manages NEKO_CONFIG; custom native Neko config files are unsupported (use direct mode to retain one)")
+			}
+		}
+	}
+	return nil
+}
+
 func (settings *RoomSettings) ToEnv(config *config.Room, ports PortSettings) ([]string, error) {
+	if err := settings.ValidateNetworkPolicy(config); err != nil {
+		return nil, err
+	}
 	switch settings.ApiVersion {
 	case 2:
 		return settings.toEnvV2(config, ports), nil
 	case 3:
-		return settings.toEnvV3(config, ports), nil
+		return settings.toEnvV3(config, ports)
 	default:
 		return nil, fmt.Errorf("unsupported API version: %d", settings.ApiVersion)
 	}
@@ -167,6 +191,7 @@ type RoomManager interface {
 	List(ctx context.Context, labels map[string]string) ([]RoomEntry, error)
 	ExportAsDockerCompose(ctx context.Context) ([]byte, error)
 
+	ValidateSettings(ctx context.Context, settings RoomSettings) error
 	Create(ctx context.Context, settings RoomSettings) (string, error)
 	GetEntry(ctx context.Context, id string) (*RoomEntry, error)
 	GetEntryByName(ctx context.Context, name string) (*RoomEntry, error)

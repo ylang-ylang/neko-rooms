@@ -27,6 +27,7 @@ func (manager *RoomManagerCtx) containerToEntry(container dockerContainer.Summar
 		URL:            labels.URL,
 		Name:           labels.Name,
 		NekoImage:      labels.NekoImage,
+		NetworkMode:    labels.NetworkMode,
 		IsOutdated:     labels.NekoImage != container.Image,
 		MaxConnections: labels.Epr.Max - labels.Epr.Min + 1,
 		Running:        container.State == "running",

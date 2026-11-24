@@ -6,8 +6,11 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/m1k1o/neko-rooms/internal/config"
 	"github.com/m1k1o/neko-rooms/internal/types"
 )
+
+const networkModeLabel = "m1k1o.neko_rooms.network_mode"
 
 var labelRegex = regexp.MustCompile(`^[a-z0-9.-]+$`)
 
@@ -17,8 +20,9 @@ type RoomLabels struct {
 	Mux  bool
 	Epr  EprPorts
 
-	NekoImage  string
-	ApiVersion int
+	NekoImage   string
+	ApiVersion  int
+	NetworkMode string
 
 	BrowserPolicy *BrowserPolicyLabels
 	UserDefined   map[string]string
@@ -100,6 +104,15 @@ func (manager *RoomManagerCtx) extractLabels(labels map[string]string) (*RoomLab
 		}
 	}
 
+	// Containers created before network policies existed used published ports.
+	networkMode := config.NetworkModeDirect
+	if value, ok := labels[networkModeLabel]; ok {
+		if value != config.NetworkModeDirect && value != config.NetworkModeRelay {
+			return nil, fmt.Errorf("damaged container labels: invalid network_mode")
+		}
+		networkMode = value
+	}
+
 	var browserPolicy *BrowserPolicyLabels
 	if val, ok := labels["m1k1o.neko_rooms.browser_policy"]; ok && val == "true" {
 		policyType, ok := labels["m1k1o.neko_rooms.browser_policy.type"]
@@ -132,8 +145,9 @@ func (manager *RoomManagerCtx) extractLabels(labels map[string]string) (*RoomLab
 		Mux:  mux,
 		Epr:  epr,
 
-		NekoImage:  nekoImage,
-		ApiVersion: apiVersion,
+		NekoImage:   nekoImage,
+		ApiVersion:  apiVersion,
+		NetworkMode: networkMode,
 
 		BrowserPolicy: browserPolicy,
 		UserDefined:   userDefined,
@@ -146,6 +160,7 @@ func (manager *RoomManagerCtx) serializeLabels(labels RoomLabels) map[string]str
 		"m1k1o.neko_rooms.url":        manager.config.GetRoomUrl(labels.Name),
 		"m1k1o.neko_rooms.instance":   manager.config.InstanceName,
 		"m1k1o.neko_rooms.neko_image": labels.NekoImage,
+		networkModeLabel:              labels.NetworkMode,
 	}
 
 	// api version 2 is currently default

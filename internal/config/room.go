@@ -1,6 +1,7 @@
 package config
 
 import (
+	"fmt"
 	"net/url"
 	"path"
 	"path/filepath"
@@ -22,6 +23,9 @@ type Traefik struct {
 }
 
 type Room struct {
+	NetworkMode             string
+	RelayICEServersFrontend string `json:"-"`
+
 	Mux    bool
 	EprMin uint16
 	EprMax uint16
@@ -48,6 +52,16 @@ type Room struct {
 }
 
 func (Room) Init(cmd *cobra.Command) error {
+	cmd.PersistentFlags().String("network.mode", NetworkModeDirect, "room networking: direct (publish media ports) or relay (Neko v3 with frontend TURN)")
+	if err := viper.BindPFlag("network.mode", cmd.PersistentFlags().Lookup("network.mode")); err != nil {
+		return err
+	}
+
+	cmd.PersistentFlags().String("relay.ice_servers_frontend", "", "JSON array of authenticated frontend RTCIceServers, including a TURN TCP or TLS listener")
+	if err := viper.BindPFlag("relay.ice_servers_frontend", cmd.PersistentFlags().Lookup("relay.ice_servers_frontend")); err != nil {
+		return err
+	}
+
 	cmd.PersistentFlags().Bool("mux", false, "use mux for connection - needs only one UDP and TCP port per room")
 	if err := viper.BindPFlag("mux", cmd.PersistentFlags().Lookup("mux")); err != nil {
 		return err
@@ -183,6 +197,12 @@ func (Room) Init(cmd *cobra.Command) error {
 }
 
 func (s *Room) Set() {
+	s.NetworkMode = viper.GetString("network.mode")
+	s.RelayICEServersFrontend = viper.GetString("relay.ice_servers_frontend")
+	if err := s.ValidateNetworking(); err != nil {
+		panic(fmt.Errorf("invalid room networking configuration: %w", err))
+	}
+
 	s.Mux = viper.GetBool("mux")
 
 	min := uint16(59000)

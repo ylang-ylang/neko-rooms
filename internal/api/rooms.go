@@ -131,6 +131,11 @@ func (manager *ApiManagerCtx) roomRecreate(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
+	if err := manager.rooms.ValidateSettings(r.Context(), *settings); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
 	if err := manager.rooms.Remove(r.Context(), roomId); err != nil {
 		manager.logger.Error().Err(err).Msg("recreate: failed to remove room")
 		http.Error(w, err.Error(), 500)

@@ -17,6 +17,27 @@ info:
     clients must supply Origin. Reverse-proxy HTTPS headers are trusted only with
     NEKO_ROOMS_PROXY=true. Owner sessions expire after seven days or manager restart,
     and cannot authenticate Agent CDP. Agent Bearer keys cannot manage rooms or keys.
+
+    Room networking defaults to direct. NEKO_ROOMS_NETWORK_MODE=relay (CLI
+    --network.mode=relay) requires Neko API v3 and operator-configured frontend
+    RTCIceServers in NEKO_ROOMS_RELAY_ICE_SERVERS_FRONTEND (CLI
+    --relay.ice_servers_frontend). Include authenticated turn: or turns: URLs and
+    at least one TURN TCP or TLS listener; plain TURN/TCP is valid for local labs.
+    Relay rooms publish no per-room media host ports. TURN relay allocations must
+    remain on a private network reachable by the room containers. Internet clients
+    connect to the configured fixed TURN listener, not to per-room media ports.
+    Neko 3.2.0 requires a relay-only startup adapter to disable automatic public-IP
+    discovery: it writes a nonsecret, world-readable native config in the container's
+    temporary layer and execs the image's original startup argv. Explicit custom
+    NEKO_CONFIG, mounted/inherited native config files, and image CLI overrides of
+    managed Neko settings (including --config and WebRTC networking flags) are
+    rejected in relay mode rather than silently replaced; direct mode is unchanged.
+    Relay rooms default native NEKO_LOG_LEVEL to warn because pinned Neko logs TURN
+    credentials at info/debug. An explicit per-room NEKO_LOG_LEVEL overrides this
+    default; verbose credential-bearing logs are an operator opt-in.
+    Config responses expose only the nonsecret network mode, never TURN credentials.
+    Changing policy does not migrate or restart existing rooms: it affects new rooms
+    and rooms explicitly recreated afterward. Legacy rooms without mode metadata are direct.
 servers:
   # Added by API Auto Mocking Plugin
   - description: SwaggerHub API Auto Mocking
@@ -137,6 +158,7 @@ paths:
       tags:
         - config
       summary: Get rooms config
+      description: Nonsecret room-creation policy and capacity. Does not include frontend ICE servers or TURN credentials.
       operationId: roomsConfig
       responses:
         '200':
@@ -496,6 +518,11 @@ paths:
       tags:
         - rooms
       summary: Recreate room
+      description: |
+        Explicitly replaces this room using the manager's current network policy.
+        The read-only network_mode in saved settings cannot override that policy.
+        Unsupported API versions (including v2 in relay mode) are rejected before
+        removing the existing container. No rooms are recreated automatically.
       operationId: roomRecreate
       parameters:
         - in: path
@@ -524,6 +551,8 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/RoomEntry'
+        '400':
+          description: Unsupported network/API or native config combination; existing container is not removed.
         '404':
           description: Room not found
         '500':
@@ -692,6 +721,11 @@ components:
     RoomsConfig:
       type: object
       properties:
+        network_mode:
+          type: string
+          enum: [direct, relay]
+          default: direct
+          description: Policy for new or explicitly recreated rooms; existing rooms retain their actual mode. No ICE server credentials are returned.
         connections:
           type: number
           example: 100
@@ -722,6 +756,10 @@ components:
         neko_image:
           type: string
           example: ghcr.io/m1k1o/neko/firefox:latest
+        network_mode:
+          type: string
+          enum: [direct, relay]
+          description: Actual policy recorded on this container; absent legacy metadata is interpreted as direct.
         is_outdated:
           type: boolean
           example: true
@@ -796,7 +834,12 @@ components:
       properties:
         api_version:
           type: number
-          description: if not set, version is taken from neko_image
+          description: If not set, version is taken from neko_image. Relay networking requires version 3.
+        network_mode:
+          type: string
+          enum: [direct, relay]
+          readOnly: true
+          description: Actual mode of the inspected container. Creation and explicit recreation always use the manager's current policy, not this field.
         name:
           type: string
           example: foobar
@@ -845,6 +888,7 @@ components:
           type: string
         envs:
           type: object
+          description: Custom environment. Relay mode owns WebRTC and legacy network keys; per-room overrides cannot change the network policy or frontend TURN configuration. Explicit NEKO_CONFIG is rejected in relay mode.
           additionalProperties: 
             type: string
           example:
