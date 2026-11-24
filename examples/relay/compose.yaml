@@ -1,0 +1,107 @@
+# Requires Docker Compose >= 2.30 (raw private env_file); no room services here.
+# Run configure.py first, then use its PRIVATE compose.env with --env-file.
+services:
+  gateway:
+    image: nginx:1.30.7-alpine@sha256:caf4e1e032a20f9c3c5e28fc7f25ffd768ad8677b4975c54193075997b3a97e3
+    restart: unless-stopped
+    # Bypass image template mutation: the complete mounted config is authoritative.
+    entrypoint: [nginx]
+    command: [-g, "daemon off;"]
+    labels:
+      io.neko-rooms.relay.public-host: ${PUBLIC_HOST:?supply real hostname via configure.py}
+    ports:
+      - "${PUBLIC_BIND_IP:?set approved bind IP}:${HTTPS_PORT:-443}:443/tcp"
+      - "${PUBLIC_BIND_IP:?set approved bind IP}:${TURNS_PORT:-5349}:5349/tcp"
+    volumes:
+      - type: bind
+        source: ${RELAY_STATE_DIR:?run configure.py}/nginx.conf
+        target: /etc/nginx/nginx.conf
+        read_only: true
+        bind: {create_host_path: false}
+      - type: bind
+        source: ${TLS_CERT_FILE:?supply matching certificate}
+        target: /run/relay/tls.crt
+        read_only: true
+        bind: {create_host_path: false}
+      - type: bind
+        source: ${TLS_KEY_FILE:?supply matching private key}
+        target: /run/relay/tls.key
+        read_only: true
+        bind: {create_host_path: false}
+    read_only: true
+    tmpfs: [/tmp, /var/cache/nginx]
+    cap_drop: [ALL]
+    # DAC_OVERRIDE lets the root master read 0600 operator-owned bind files.
+    cap_add: [NET_BIND_SERVICE, SETUID, SETGID, CHOWN, DAC_OVERRIDE]
+    security_opt: [no-new-privileges:true]
+    networks: [rooms]
+
+  turn:
+    image: coturn/coturn:4.6.3@sha256:71c3c990283385567f11794ee692e3a47b66fd9b0bb39e42afbe776e331dd888
+    restart: unless-stopped
+    # Avoid the image's default public-IP detection/eval entrypoint entirely.
+    entrypoint: [turnserver]
+    command: [-c, /run/relay/turnserver.conf]
+    # Root reads operator-owned 0600 config. The pinned turnserver executable
+    # also requires NET_BIND_SERVICE in the bounding set, even on port 3478.
+    user: "0:0"
+    volumes:
+      - type: bind
+        source: ${RELAY_STATE_DIR:?run configure.py}/turnserver.conf
+        target: /run/relay/turnserver.conf
+        read_only: true
+        bind: {create_host_path: false}
+    read_only: true
+    tmpfs: [/tmp]
+    cap_drop: [ALL]
+    cap_add: [DAC_OVERRIDE, NET_BIND_SERVICE]
+    security_opt: [no-new-privileges:true]
+    networks:
+      rooms:
+        ipv4_address: ${TURN_PRIVATE_IP:?choose unused private room-network IP}
+    # NO ports / host network / public relay range. Allocations live on rooms.
+
+  neko-rooms:
+    image: ${MANAGER_IMAGE:-truenas-neko-rooms-agent:1.6.5-3}
+    pull_policy: never
+    restart: unless-stopped
+    env_file:
+      - path: ${RELAY_STATE_DIR:?run configure.py}/manager.env
+        format: raw
+    environment:
+      NEKO_ROOMS_BIND: :8080
+      NEKO_ROOMS_ADMIN_STATIC: /var/www
+      NEKO_ROOMS_ADMIN_PATH_PREFIX: /manage
+      NEKO_ROOMS_ADMIN_AUTH_MODE: form
+      NEKO_ROOMS_PROXY: "true"
+      NEKO_ROOMS_TRAEFIK_ENABLED: "false"
+      NEKO_ROOMS_NETWORK_MODE: relay
+      NEKO_ROOMS_MUX: "true"
+      # Private room socket allocation only; these are never host-published.
+      NEKO_ROOMS_EPR: 59000-59999
+      NEKO_ROOMS_NAT1TO1: ""
+      NEKO_ROOMS_PATH_PREFIX: /room/
+      NEKO_ROOMS_INSTANCE_NAME: ${INSTANCE_NAME:?preserve existing instance name}
+      NEKO_ROOMS_INSTANCE_NETWORK: ${ROOM_NETWORK:?inspect or create private bridge first}
+      NEKO_ROOMS_INSTANCE_URL: ${PUBLIC_ORIGIN:?run configure.py}/
+      NEKO_ROOMS_AGENT_PUBLIC_URL: ${PUBLIC_ORIGIN:?run configure.py}/rooms/
+      NEKO_ROOMS_NEKO_IMAGES: ${ROOM_IMAGE:-truenas-neko-chromium-cdp:3.2.0-1}
+      NEKO_ROOMS_STORAGE_ENABLED: "true"
+      NEKO_ROOMS_STORAGE_INTERNAL: /data
+      NEKO_ROOMS_STORAGE_EXTERNAL: ${STORAGE_PATH:?preserve absolute host storage path}
+    volumes:
+      - type: bind
+        source: ${DOCKER_SOCKET:-/var/run/docker.sock}
+        target: /var/run/docker.sock
+        bind: {create_host_path: false}
+      - type: bind
+        source: ${STORAGE_PATH:?preserve absolute host storage path}
+        target: /data
+        bind: {create_host_path: false}
+    networks: [rooms]
+    # Manager 8080, CDP 9222/9223 and Docker/admin endpoints are NOT published.
+
+networks:
+  rooms:
+    external: true
+    name: ${ROOM_NETWORK:?supply existing private room network}

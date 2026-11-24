@@ -1,0 +1,11 @@
+__pycache__/
+*.pyc
+.env
+*.key
+*.pem
+*.crt
+compose.env
+manager.env
+turn-credentials.json
+/nginx.conf
+/turnserver.conf

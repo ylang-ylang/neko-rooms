@@ -1,0 +1,37 @@
+# Coturn 4.6.3: normal UDP allocations over a private TCP client listener.
+# The gateway terminates public TURN/TLS. Do not add external-ip, public relay
+# mappings, a WAN port range, --multiplex-peer, or --server-relay here.
+listening-port=3478
+listening-ip=@TURN_PRIVATE_IP@
+relay-ip=@TURN_PRIVATE_IP@
+min-port=@TURN_RELAY_MIN@
+max-port=@TURN_RELAY_MAX@
+no-udp
+no-tls
+no-dtls
+no-tcp-relay
+lt-cred-mech
+realm=@PUBLIC_HOST@
+user=@TURN_USERNAME@:@TURN_PASSWORD@
+fingerprint
+stale-nonce=600
+no-cli
+no-multicast-peers
+no-rfc5780
+no-stun-backward-compatibility
+no-software-attribute
+# Allowed entries override denied entries in coturn 4.6.3. Admit only the room
+# network, never arbitrary public UDP peers. IPv6 peers are denied entirely.
+denied-peer-ip=0.0.0.0-255.255.255.255
+denied-peer-ip=::-ffff:ffff:ffff:ffff:ffff:ffff:ffff:ffff
+allowed-peer-ip=@ROOM_PEER_RANGE@
+# These quotas are allocations, not rooms; tune for actual viewer concurrency.
+user-quota=100
+total-quota=100
+max-bps=12500000
+bps-capacity=125000000
+relay-threads=2
+pidfile=/tmp/turnserver.pid
+userdb=/tmp/turndb
+log-file=stdout
+simple-log

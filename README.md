@@ -90,6 +90,12 @@ This is shared-browser control, not a sandbox: use existing contexts/pages, do n
 
 New-room defaults use Neko API v3, 1920×1080 at 30 fps, 2 GiB shared memory and developer tools enabled. Separate private **Profile** (`/home/neko/profile`) and **Downloads** (`/home/neko/Downloads`) mounts preserve their data when configured with [storage](./docs/storage.md). Toggling persistent browser data affects only the Profile mount, not Downloads. Existing rooms are not migrated automatically; use compatible images and storage settings.
 
+## Fixed-public-port relay deployment
+
+For the relay-capable fork, use the [private-network relay example and operator workflow](./examples/relay/). It terminates HTTPS/UI/management/Agent WebSockets on TCP **443** and TURN/TLS media on TCP **5349** (both configurable), with ordinary TURN relay allocations confined to the private room Docker network—not a public UDP range moved to another server. Existing owner form login, temporary Agent Bearer keys, room image and Profile/Downloads storage contracts remain unchanged.
+
+The example includes strict configuration checks and a loopback-only gateway/TURN fixture test. Public activation still requires the user's actual gateway machine, domain and matching certificate, plus a preloaded relay-capable manager release; it does not deploy to the NAS or automatically migrate existing dynamic rooms. TrueNAS activation/rollback must use official `app.update` with Custom App YAML: all App services, including the default browser, are recreated, while manager-created dynamic rooms remain running. See the example for the platform-specific interruption/data-preservation instructions, canary checks, rollback and split-host private routing.
+
 ## Zero-knowledge installation (with HTTPS)
 
 No experience with Docker and reverse proxy? No problem! Follow these steps to set up your Neko Rooms quickly and securely:
@@ -124,7 +130,7 @@ docker pull ghcr.io/m1k1o/neko/chromium
 # etc...
 ```
 
-If you want to update neko image, you need to pull new image and recreate all rooms, that use old image. To update neko rooms, simply run:
+If you want to update neko image, you need to pull new image and recreate all rooms, that use old image. To update neko rooms on a **standalone Docker Compose installation**, run the commands below. For a TrueNAS-managed App, use the official `app.update`/Custom App YAML workflow described in the [operator instructions](./examples/relay/#3-controlled-activation-and-negative-checks), not manual Compose updates.
 
 ```sh
 docker-compose pull
