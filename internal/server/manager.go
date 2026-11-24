@@ -31,7 +31,7 @@ type ServerManagerCtx struct {
 	config *config.Server
 }
 
-func New(ApiManager types.ApiManager, roomConfig *config.Room, config *config.Server, proxyHandler http.Handler) *ServerManagerCtx {
+func New(ApiManager types.ApiManager, roomConfig *config.Room, config *config.Server, proxyHandler http.Handler, agentHandler http.Handler) *ServerManagerCtx {
 	logger := log.With().Str("module", "server").Logger()
 
 	router := chi.NewRouter()
@@ -247,6 +247,11 @@ func New(ApiManager types.ApiManager, roomConfig *config.Room, config *config.Se
 		router.Mount("/metrics", promhttp.HandlerFor(prometheus.DefaultGatherer, promhttp.HandlerOpts{}))
 		logger.Info().Msgf("with metrics endpoint")
 	}
+
+	// Agent CDP has its own temporary Bearer authentication, not native admin
+	// or legacy room/Basic authentication. Reserve it before the room fallback.
+	router.Handle("/rooms/{roomName}/*", agentHandler)
+	router.Handle("/rooms/{roomName}", agentHandler)
 
 	// handle all remaining paths with proxy
 	router.Handle("/*", proxyHandler)

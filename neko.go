@@ -11,6 +11,7 @@ import (
 	"github.com/rs/zerolog/log"
 	"github.com/spf13/cobra"
 
+	"github.com/m1k1o/neko-rooms/internal/agent"
 	"github.com/m1k1o/neko-rooms/internal/api"
 	"github.com/m1k1o/neko-rooms/internal/config"
 	"github.com/m1k1o/neko-rooms/internal/proxy"
@@ -111,6 +112,7 @@ type MainCtx struct {
 	roomManager   *room.RoomManagerCtx
 	pullManager   *pull.PullManagerCtx
 	apiManager    *api.ApiManagerCtx
+	agentManager  *agent.Manager
 	proxyManager  *proxy.ProxyManagerCtx
 	serverManager *server.ServerManagerCtx
 }
@@ -143,9 +145,15 @@ func (main *MainCtx) Start() {
 		main.Configs.Room.NekoImages,
 	)
 
+	main.agentManager, err = agent.New(main.roomManager, main.Configs.Server.AgentPublicURL)
+	if err != nil {
+		main.logger.Panic().Err(err).Msg("invalid Agent CDP configuration")
+	}
+
 	main.apiManager = api.New(
 		main.roomManager,
 		main.pullManager,
+		main.agentManager,
 	)
 
 	main.proxyManager = proxy.New(
@@ -159,12 +167,17 @@ func (main *MainCtx) Start() {
 		main.Configs.Room,
 		main.Configs.Server,
 		main.proxyManager,
+		main.agentManager,
 	)
 	main.serverManager.Start()
 }
 
 func (main *MainCtx) Shutdown() {
 	var err error
+
+	// http.Server.Shutdown does not close hijacked WebSockets. Invalidate keys
+	// and close both sides before draining HTTP requests or stopping managers.
+	main.agentManager.Shutdown()
 
 	err = main.serverManager.Shutdown()
 	main.logger.Err(err).Msg("server manager shutdown")

@@ -16,6 +16,54 @@ Simple room management system for [n.eko](https://github.com/m1k1o/neko). Self h
   <img src="https://github.com/m1k1o/neko-rooms/raw/master/docs/neko.gif" alt="n.eko">
 </div>
 
+## Agent-access fork
+
+This fork adds temporary, per-room Chromium DevTools Protocol (CDP) access to the **same browser and tabs shown in Neko**, plus an **Agent** action in the room list. It does not launch a separate browser. The installation examples below use upstream images; build this fork's `Dockerfile` to include these features and the updated management UI.
+
+### Setup
+
+- Use a Chromium room image with CDP enabled on loopback port **9222** and a room-side relay listening on **9223**, reachable from the manager on the room's Docker network. The manager connects to the current room container's `:9223`; it does **not** install that relay or enable CDP for you. Do not expose the unauthenticated relay publicly.
+- Protect management with the existing native admin username/password or proxy authentication. Set `NEKO_ROOMS_ADMIN_PATH_PREFIX=/manage`; the management UI is then at `/manage/`. Agent keys never grant management access.
+- Set the public CDP prefix, including the entire path before the room name:
+
+  ```yaml
+  NEKO_ROOMS_AGENT_PUBLIC_URL: https://cdp.example.com/rooms/
+  ```
+
+  This is a **full prefix**, not just an origin. For an external `/cdp/rooms/` prefix, use `https://cdp.example.com/cdp/rooms/` and have the reverse proxy map it to the manager's `/rooms/` routes. Without this variable, URLs are inferred from the request and forwarded host/protocol headers, with `/rooms/` as the path. Configure trusted proxy headers correctly or set the explicit prefix.
+- Route public CDP HTTP and WebSocket traffic directly to the manager, preserving `Authorization: Bearer …` and WebSocket upgrade headers. Do not put a Basic-auth/login-page challenge in front of `/rooms/`; management remains separately protected.
+
+### Give an agent access
+
+Open a room's **Agent** dialog, choose a lifetime (15 minutes, 1 hour, or 8 hours), optionally add a label, and create a key. Copy the returned handoff prompt verbatim; it contains the URL, temporary Bearer key, expiry and instructions to reuse existing tabs. If automatic clipboard access fails, use the visible, selectable prompt or the copy button.
+
+The raw key and prompt are returned **only when created**. Closing the dialog does not revoke the key; reopening shows metadata and connection counts, not the secret. Refresh the list to update counts, and use **Revoke** to end access. The API defaults to 1 hour and accepts `ttl_seconds` from 1 to 86400 (24 hours). Keys are held in memory by hash: expiry or revocation closes existing sockets as well as rejecting new connections, and **restarting the manager invalidates all keys**.
+
+Keys bind to the stable room **name**, not its container ID. Each HTTP discovery request and WebSocket connection resolves that name to the current managed container, so room recreation preserves the key's identity until expiry. Renaming or reusing a name changes which room that name identifies. A stopped, paused or missing room cannot be used for CDP access.
+
+| Route (with `/manage` configured) | Authentication / purpose |
+| --- | --- |
+| `POST /manage/api/agent/rooms/{name}/keys` | Native management auth; JSON `{ "ttl_seconds": 3600, "label": "assistant" }` returns key and canonical prompt |
+| `GET /manage/api/agent/rooms/{name}/keys` | Native management auth; active key metadata and connection counts |
+| `DELETE /manage/api/agent/rooms/{name}/keys/{key_id}` | Native management auth; revoke and close that key's sessions |
+| `GET /rooms/{name}/json/version`, `GET /rooms/{name}/json/list` | Temporary Bearer header; CDP discovery with public debugger URLs |
+| `GET /rooms/{name}/devtools/browser/*`, `GET /rooms/{name}/devtools/page/*` | Temporary Bearer header on the WebSocket upgrade |
+
+Use the same `Authorization: Bearer …` header for **both discovery and WebSocket connections**; never put the key in a URL/query or use page-global headers as CDP authentication. For example, with Playwright in Node.js:
+
+```js
+const browser = await chromium.connectOverCDP('https://cdp.example.com/rooms/example-room/', {
+  headers: { Authorization: `Bearer ${process.env.AGENT_KEY}` },
+});
+console.log(browser.contexts()[0].pages().map(page => page.url()));
+```
+
+This is shared-browser control, not a sandbox: use existing contexts/pages, do not launch another browser or close shared tabs/the browser, and revoke the key when finished. Neither Neko login passwords nor long-lived management credentials belong in the agent handoff.
+
+### Room presets
+
+New-room defaults use Neko API v3, 1920×1080 at 30 fps, 2 GiB shared memory and developer tools enabled. Separate private **Profile** (`/home/neko/profile`) and **Downloads** (`/home/neko/Downloads`) mounts preserve their data when configured with [storage](./docs/storage.md). Toggling persistent browser data affects only the Profile mount, not Downloads. Existing rooms are not migrated automatically; use compatible images and storage settings.
+
 ## Zero-knowledge installation (with HTTPS)
 
 No experience with Docker and reverse proxy? No problem! Follow these steps to set up your Neko Rooms quickly and securely:

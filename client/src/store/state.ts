@@ -30,6 +30,8 @@ export const state = {
   roomsConfig: {} as RoomsConfig,
   rooms: [] as RoomEntry[],
   defaultRoomSettings: {
+    // Agent-room preset: independent persistent Profile and Downloads mounts.
+    api_version: 3,
     name: '',
     // eslint-disable-next-line
     neko_image: '',
@@ -44,7 +46,7 @@ export const state = {
     // eslint-disable-next-line
     implicit_control: false,
   
-    screen: '1280x720@30',
+    screen: '1920x1080@30',
     // eslint-disable-next-line
     video_codec: 'VP8',
     // eslint-disable-next-line
@@ -67,14 +69,17 @@ export const state = {
     // eslint-disable-next-line
     envs: {},
     // eslint-disable-next-line
-    mounts: [],
+    mounts: [
+      { type: 'private', host_path: '/profile', container_path: '/home/neko/profile' },
+      { type: 'private', host_path: '/downloads', container_path: '/home/neko/Downloads' },
+    ],
     // eslint-disable-next-line
     resources: {
       // eslint-disable-next-line
       nano_cpus: 0,
       memory: 0,
       // eslint-disable-next-line
-      shm_size: 2000000000,
+      shm_size: 2147483648,
       devices: [],
     },
 
@@ -158,7 +163,7 @@ export const state = {
     {
       type: BrowserPolicyTypeEnum.chromium,
       path: '/etc/chromium/policies/managed/policies.json',
-      profile: '/home/neko/.config/chromium',
+      profile: '/home/neko/profile',
       images: [ 'chromium', 'ungoogled-chromium' ],
     },
     {
@@ -327,9 +332,9 @@ export const state = {
   defaultBrowserPolicyContent: {
     extensions: [],
     // eslint-disable-next-line
-    developer_tools: false,
+    developer_tools: true,
     // eslint-disable-next-line
-    persistent_data: false,
+    persistent_data: true,
   } as BrowserPolicyContent,
 
   //

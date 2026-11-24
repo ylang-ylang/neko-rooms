@@ -45,10 +45,17 @@
         <RoomActionBtn action="pause" :roomId="item.id" :disabled="!item.running" />
         <RoomActionBtn action="restart" :roomId="item.id" :disabled="!item.running" />
       </template>
+      <template v-slot:[`item.agent`]="{ item }">
+        <v-btn small outlined color="primary" :disabled="!item.name" @click="agentRoomName = item.name">
+          <v-icon small left>mdi-robot-outline</v-icon>Agent
+        </v-btn>
+      </template>
       <template v-slot:[`item.destroy`]="{ item }">
         <RoomActionBtn action="remove" :roomId="item.id" />
       </template>
     </v-data-table>
+
+    <AgentAccess v-if="agentRoomName" :key="agentRoomName" :roomName="agentRoomName" @close="agentRoomName = ''" />
 
     <v-dialog v-model="dialog" max-width="920px">
       <v-card>
@@ -73,11 +80,13 @@
 import { Vue, Component, Prop } from 'vue-property-decorator'
 import RoomInfo from '@/components/RoomInfo.vue'
 import RoomActionBtn from '@/components/RoomActionBtn.vue'
+import AgentAccess from '@/components/AgentAccess.vue'
 
 @Component({
   components: {
     RoomInfo,
     RoomActionBtn,
+    AgentAccess,
   }
 })
 export default class RoomsList extends Vue {
@@ -85,6 +94,7 @@ export default class RoomsList extends Vue {
 
   public dialog = false
   public roomId = ''
+  public agentRoomName = ''
   public roomLoading = [] as Array<string>
 
   get headers() {
@@ -107,6 +117,7 @@ export default class RoomsList extends Vue {
         value: 'actions',
         sortable: false,
       },
+      { text: 'Agent', value: 'agent', sortable: false },
       {
         text: 'Destroy',
         value: 'destroy',

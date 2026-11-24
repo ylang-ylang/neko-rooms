@@ -584,8 +584,8 @@ export default class RoomsCreate extends Vue {
 
   public loading = false
   public loadingWithStart = false
-  public data: RoomSettings = { ...this.$store.state.defaultRoomSettings }
-  public browserPolicyContent: BrowserPolicyContent = { ...this.$store.state.defaultBrowserPolicyContent }
+  public data: RoomSettings = JSON.parse(JSON.stringify(this.$store.state.defaultRoomSettings))
+  public browserPolicyContent: BrowserPolicyContent = JSON.parse(JSON.stringify(this.$store.state.defaultBrowserPolicyContent))
   public envList: { key: string; val: string }[] = []
 
   // eslint-disable-next-line
@@ -693,12 +693,12 @@ export default class RoomsCreate extends Vue {
     const config = this.browserPolicyConfig
     if (!config) return
 
-    if (enabled) {
+    if (enabled && !(this.data.mounts || []).some(({ container_path }) => container_path === config.profile)) {
       // eslint-disable-next-line
       this.data.mounts = [ ...(this.data.mounts || []), { type: RoomMountTypeEnum.private, host_path: '/profile', container_path: config.profile }]
-    } else {
+    } else if (!enabled) {
       // eslint-disable-next-line
-      this.data.mounts = (this.data.mounts || []).filter(({ type, container_path }) => type != RoomMountTypeEnum.private && container_path != config.profile)
+      this.data.mounts = (this.data.mounts || []).filter(({ type, container_path }) => !(type === RoomMountTypeEnum.private && container_path === config.profile))
     }
   }
 
@@ -808,11 +808,11 @@ export default class RoomsCreate extends Vue {
   Clear() {
     this._form.resetValidation()
     this.data = {
-      ...this.$store.state.defaultRoomSettings,
+      ...JSON.parse(JSON.stringify(this.$store.state.defaultRoomSettings)),
       // eslint-disable-next-line
       neko_image: this.nekoImages[0],
     }
-    this.browserPolicyContent = { ...this.$store.state.defaultBrowserPolicyContent }
+    this.browserPolicyContent = JSON.parse(JSON.stringify(this.$store.state.defaultBrowserPolicyContent))
     this.envList = Object.entries({...this.data.envs}).map(([ key, val ]) => ({ key, val, }))
   }
 
