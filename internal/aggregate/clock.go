@@ -2,6 +2,7 @@ package aggregate
 
 import (
 	"errors"
+	"fmt"
 	"sync"
 	"time"
 
@@ -63,7 +64,7 @@ func (c *rtpClock) timestamp(timestamp uint32) (int64, error) {
 		target := wallMS - c.origin.UnixMilli() + int64(int32(timestamp-c.report.RTPTime))*1000/int64(c.rate)
 		correction := target - nominal - c.offsetMS
 		if correction > 1000 || correction < -1000 {
-			return 0, errors.New("RTP Sender Report clock diverged by over one second")
+			return 0, fmt.Errorf("RTP Sender Report clock diverged by over one second: rate=%d target_ms=%d nominal_ms=%d offset_ms=%d correction_ms=%d sr_packets=%d sr_octets=%d sample_rtp=%d sr_rtp=%d", c.rate, target, nominal, c.offsetMS, correction, c.report.PacketCount, c.report.OctetCount, timestamp, c.report.RTPTime)
 		}
 		// At most 10% of this sample interval: bounded drift correction never
 		// turns a normally increasing RTP clock into backwards WebM PTS.
