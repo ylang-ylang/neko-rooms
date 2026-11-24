@@ -22,6 +22,20 @@ type nativeMember struct {
 	} `json:"state"`
 }
 
+// Native track acknowledgements describe resolved subscriptions, not SDP or
+// authorization. Keep them separate from the peer's negotiation protocol.
+// Shapes match pinned Neko 3.2 types.PeerAudio / types.PeerVideo.
+type nativeAudioState struct {
+	Disabled bool `json:"disabled"`
+}
+
+type nativeVideoState struct {
+	Disabled bool   `json:"disabled"`
+	ID       string `json:"id"`
+	Video    string `json:"video"` // native compatibility alias, not a codec
+	Auto     bool   `json:"auto"`
+}
+
 type viewerState struct {
 	ID            string
 	Profile       nativeProfile
@@ -29,6 +43,8 @@ type viewerState struct {
 	Host          string
 	PrivateMode   bool
 	Members       map[string]nativeMember
+	Audio         *nativeAudioState
+	Video         *nativeVideoState
 }
 
 func (s viewerState) allowed() bool {
@@ -88,6 +104,12 @@ func (v *viewer) emitState() error {
 		members = append(members, map[string]any{"id": id, "username": member.Profile.Name, "connected": member.State.IsConnected, "is_admin": member.Profile.IsAdmin})
 	}
 	state := map[string]any{"type": "state", "controller_id": s.Host, "member_id": s.ID, "width": s.Width, "height": s.Height, "members": members, "can_host": s.Profile.CanHost, "can_watch": s.allowed(), "can_access_clipboard": s.Profile.CanAccessClipboard}
+	if s.Audio != nil {
+		state["audio"] = s.Audio
+	}
+	if s.Video != nil {
+		state["video"] = s.Video
+	}
 	v.stateMu.Unlock()
 	return v.emit(state)
 }
@@ -101,10 +123,34 @@ func (v *viewer) handleNative(message nativeMessage) error {
 		return ErrNotReady
 	}
 	if strings.HasPrefix(message.Event, "signal/") {
-		if message.Event == "signal/close" {
-			v.stop(websocket.CloseTryAgainLater, "native media peer closed; reconnect required")
+		switch message.Event {
+		case "signal/audio", "signal/video":
+			// SetAudio/SetVideo acknowledge resolved track state asynchronously:
+			// these may arrive before OR after provide and carry no SDP.
+			return v.trackState(message.Event, message.Payload)
+		case "signal/provide":
+			var provide struct {
+				Audio json.RawMessage `json:"audio"`
+				Video json.RawMessage `json:"video"`
+			}
+			if err := decodeJSON(message.Payload, &provide); err != nil {
+				v.stop(websocket.CloseTryAgainLater, "invalid native media offer")
+				return err
+			}
+			for _, track := range []nativeMessage{{Event: "signal/audio", Payload: provide.Audio}, {Event: "signal/video", Payload: provide.Video}} {
+				if len(track.Payload) > 0 {
+					if err := v.trackState(track.Event, track.Payload); err != nil {
+						return err
+					}
+				}
+			}
+		case "signal/close", "signal/restart":
+			// Do not continue an old MSE timeline across a native peer restart.
+			v.stop(websocket.CloseTryAgainLater, "native media peer reset; reconnect required")
 			return ErrNotReady
 		}
+		// Only negotiation/candidates go to Pion. Unknown signaling still
+		// fails explicitly rather than silently swallowing protocol changes.
 		if err := v.peer.HandleSignal(message.Event, message.Payload); err != nil {
 			v.stop(websocket.CloseTryAgainLater, "private media signaling failed")
 			return err
@@ -244,6 +290,47 @@ func (v *viewer) handleNative(message nativeMessage) error {
 		return v.emitState()
 	}
 	return nil
+}
+
+// trackState consumes exactly the native audio/video acknowledgements. A mux
+// advertising both tracks cannot continue when one is disabled, or silently
+// append a changed subscription into its old decoder epoch. Reconnect obtains
+// a new authenticated peer, hello, WebM init and keyframe instead.
+func (v *viewer) trackState(event string, payload json.RawMessage) error {
+	var status struct {
+		Disabled *bool `json:"disabled"`
+	}
+	if decodeJSON(payload, &status) != nil || status.Disabled == nil {
+		v.stop(websocket.CloseTryAgainLater, "invalid native media track state")
+		return errors.New("native track acknowledgement lacks boolean disabled status")
+	}
+	var video nativeVideoState
+	if event == "signal/video" {
+		if decodeJSON(payload, &video) != nil || (!video.Disabled && video.ID == "") {
+			v.stop(websocket.CloseTryAgainLater, "invalid native video track state")
+			return errors.New("native video acknowledgement lacks resolved stream identity")
+		}
+	}
+	v.stateMu.Lock()
+	changed := false
+	if event == "signal/audio" {
+		v.state.Audio = &nativeAudioState{Disabled: *status.Disabled}
+	} else {
+		previous := v.state.Video
+		changed = previous != nil && (previous.ID != video.ID || previous.Auto != video.Auto)
+		v.state.Video = &video
+	}
+	allowed := v.state.allowed()
+	v.stateMu.Unlock()
+	if !allowed {
+		v.stop(websocket.ClosePolicyViolation, "native viewing permission revoked or private mode enabled")
+		return ErrNotReady
+	}
+	if *status.Disabled || changed {
+		v.stop(websocket.CloseTryAgainLater, "native media track disabled or changed; reconnect required")
+		return ErrNotReady
+	}
+	return v.emitState()
 }
 
 func (v *viewer) rememberCursor(cursor map[string]any) {
