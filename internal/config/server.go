@@ -24,7 +24,8 @@ type Server struct {
 	PProf   bool
 	Metrics bool
 
-	Admin Admin
+	AgentPublicURL string
+	Admin          Admin
 }
 
 func (Server) Init(cmd *cobra.Command) error {
@@ -60,6 +61,11 @@ func (Server) Init(cmd *cobra.Command) error {
 
 	cmd.PersistentFlags().Bool("metrics", false, "enable metrics endpoint available at /metrics")
 	if err := viper.BindPFlag("metrics", cmd.PersistentFlags().Lookup("metrics")); err != nil {
+		return err
+	}
+
+	cmd.PersistentFlags().String("agent.public_url", "", "public Agent CDP prefix, e.g. https://cdp.example.test/rooms/ (otherwise infer from request headers)")
+	if err := viper.BindPFlag("agent.public_url", cmd.PersistentFlags().Lookup("agent.public_url")); err != nil {
 		return err
 	}
 
@@ -101,6 +107,7 @@ func (s *Server) Set() {
 	s.CORS = viper.GetBool("cors")
 	s.PProf = viper.GetBool("pprof")
 	s.Metrics = viper.GetBool("metrics")
+	s.AgentPublicURL = viper.GetString("agent.public_url")
 
 	s.Admin.Static = viper.GetString("admin.static")
 	s.Admin.PathPrefix = path.Join("/", path.Clean(viper.GetString("admin.path_prefix")))

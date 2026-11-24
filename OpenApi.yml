@@ -11,6 +11,8 @@ tags:
     description: config endpoints
   - name: rooms
     description: room endpoints
+  - name: agent
+    description: Temporary per-room Agent access, protected by native management authentication
 paths:
   /api/config/rooms:
     get:
@@ -25,6 +27,101 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/RoomsConfig'
+        '500':
+          description: Internal server error
+  /api/agent/rooms/{roomName}/keys:
+    parameters:
+      - in: path
+        name: roomName
+        required: true
+        description: Stable room name, URL-encoded as a single path segment (not container ID)
+        schema:
+          type: string
+    post:
+      tags:
+        - agent
+      summary: Create a temporary Agent key and its canonical handoff prompt
+      description: |
+        Relative to the management UI base, e.g. /manage/api/agent/rooms/{roomName}/keys.
+        The raw key and prompt are returned only at issuance and must not be persisted by the client.
+        Manager restart invalidates all temporary keys. No room or management passwords are included.
+      operationId: agentKeyCreate
+      security:
+        - managerBasicAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AgentKeyCreate'
+      responses:
+        '201':
+          description: Created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/IssuedAgentKey'
+        '400':
+          description: Invalid TTL or request
+        '401':
+          description: Management authentication required
+        '404':
+          description: Room not found
+        '500':
+          description: Internal server error
+    get:
+      tags:
+        - agent
+      summary: List active Agent keys for a room, without raw keys or prompts
+      operationId: agentKeysList
+      security:
+        - managerBasicAuth: []
+      responses:
+        '200':
+          description: Active keys and current connection counts
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [keys]
+                properties:
+                  keys:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/AgentKey'
+        '401':
+          description: Management authentication required
+        '404':
+          description: Room not found
+        '500':
+          description: Internal server error
+  /api/agent/rooms/{roomName}/keys/{keyId}:
+    delete:
+      tags:
+        - agent
+      summary: Revoke an Agent key and close its active sessions
+      operationId: agentKeyRevoke
+      security:
+        - managerBasicAuth: []
+      parameters:
+        - in: path
+          name: roomName
+          required: true
+          description: Stable room name, URL-encoded as a single path segment
+          schema:
+            type: string
+        - in: path
+          name: keyId
+          required: true
+          schema:
+            type: string
+      responses:
+        '204':
+          description: Key revoked and all of its sessions closed
+        '401':
+          description: Management authentication required
+        '404':
+          description: Room or key not found
         '500':
           description: Internal server error
   /api/rooms:
@@ -389,7 +486,65 @@ paths:
           description: Internal server error
 
 components:
+  securitySchemes:
+    managerBasicAuth:
+      type: http
+      scheme: basic
+      description: Native management authentication, using the browser's existing credential cache
   schemas:
+    AgentKeyCreate:
+      type: object
+      required: [ttl_seconds]
+      properties:
+        ttl_seconds:
+          type: integer
+          minimum: 1
+          maximum: 86400
+          default: 3600
+        label:
+          type: string
+          default: ''
+    AgentKey:
+      type: object
+      required: [key_id, room_name, label, created_at, expires_at, active_connections]
+      properties:
+        key_id:
+          type: string
+        room_name:
+          type: string
+        label:
+          type: string
+        created_at:
+          type: string
+          format: date-time
+        expires_at:
+          type: string
+          format: date-time
+        active_connections:
+          type: integer
+          minimum: 0
+    IssuedAgentKey:
+      type: object
+      required: [key_id, key, room_name, created_at, expires_at, cdp_url, prompt]
+      properties:
+        key_id:
+          type: string
+        key:
+          type: string
+          description: Raw temporary key, shown only at issuance
+        room_name:
+          type: string
+        created_at:
+          type: string
+          format: date-time
+        expires_at:
+          type: string
+          format: date-time
+        cdp_url:
+          type: string
+        prompt:
+          type: string
+          description: Canonical handoff text to copy verbatim; clients must not reconstruct it
     RoomsConfig:
       type: object
       properties:
