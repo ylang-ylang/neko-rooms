@@ -3,6 +3,7 @@ package room
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -362,6 +363,30 @@ func TestInvalidNetworkingFailsBeforeDockerCreate(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestRelayPolicyErrorsAreTypedButDockerErrorsAreNot(t *testing.T) {
+	manager, _ := newNetworkManager(t, networkConfig(config.NetworkModeRelay, false))
+	settings := networkSettings("policy-error")
+	settings.ApiVersion = 2
+	if _, err := manager.Create(context.Background(), settings); !errors.Is(err, types.ErrInvalidRoomSettings) {
+		t.Fatalf("relay V2 rejection lost its client-error classification: %v", err)
+	}
+
+	daemon := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, `{"message":"daemon unavailable"}`, http.StatusInternalServerError)
+	}))
+	t.Cleanup(daemon.Close)
+	client, err := dockerClient.NewClientWithOpts(dockerClient.WithHost(daemon.URL), dockerClient.WithVersion("1.51"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { client.Close() })
+	manager.client = client
+	settings.ApiVersion = 3
+	if _, err := manager.Create(context.Background(), settings); err == nil || errors.Is(err, types.ErrInvalidRoomSettings) {
+		t.Fatalf("Docker inspection failure was flattened into a client error: %v", err)
 	}
 }
 

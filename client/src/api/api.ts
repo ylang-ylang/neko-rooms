@@ -219,6 +219,12 @@ export interface PullStatus {
  */
 export interface RoomEntry {
     /**
+     * Actual policy recorded on this container; absent legacy metadata is interpreted as direct.
+     * @type {string}
+     * @memberof RoomEntry
+     */
+    'network_mode'?: 'direct' | 'relay';
+    /**
      * 
      * @type {string}
      * @memberof RoomEntry
@@ -406,6 +412,12 @@ export interface RoomResources {
  * @interface RoomSettings
  */
 export interface RoomSettings {
+    /**
+     * Actual mode of the inspected container. Creation and explicit recreation always use the manager's current policy, not this field.
+     * @type {string}
+     * @memberof RoomSettings
+     */
+    readonly 'network_mode'?: 'direct' | 'relay';
     /**
      * if not set, version is taken from neko_image
      * @type {number}
@@ -624,6 +636,12 @@ export interface RoomStats {
  * @interface RoomsConfig
  */
 export interface RoomsConfig {
+    /**
+     * Policy for new or explicitly recreated rooms; existing rooms retain their actual mode. No ICE server credentials are returned.
+     * @type {string}
+     * @memberof RoomsConfig
+     */
+    'network_mode'?: 'direct' | 'relay';
     /**
      * 
      * @type {number}

@@ -311,10 +311,10 @@ func (manager *RoomManagerCtx) prepareSettings(ctx context.Context, settings typ
 	}
 
 	if err := settings.ValidateNetworkPolicy(manager.config); err != nil {
-		return settings, nil, err
+		return settings, nil, fmt.Errorf("%w: %s", types.ErrInvalidRoomSettings, err)
 	}
 	if settings.ApiVersion != 2 && settings.ApiVersion != 3 {
-		return settings, nil, fmt.Errorf("unsupported API version: %d", settings.ApiVersion)
+		return settings, nil, fmt.Errorf("%w: unsupported API version: %d", types.ErrInvalidRoomSettings, settings.ApiVersion)
 	}
 	if manager.config.EffectiveNetworkMode() == config.NetworkModeRelay {
 		if image == nil {
@@ -325,7 +325,7 @@ func (manager *RoomManagerCtx) prepareSettings(ctx context.Context, settings typ
 			image = &inspect
 		}
 		if err := validateRelaySettings(settings, image); err != nil {
-			return settings, nil, err
+			return settings, nil, fmt.Errorf("%w: %s", types.ErrInvalidRoomSettings, err)
 		}
 	}
 	return settings, image, nil

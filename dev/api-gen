@@ -1,5 +1,8 @@
 #!/bin/bash
 
+# For network_mode metadata only, use `cd ../client && npm run generate:network-types`.
+# That bounded schema sync preserves the existing SDK and handwritten Agent client.
+# The full generator below replaces the API directory; review its entire output.
 rm -rf ../client/src/api
 mkdir ../client/src/api
 

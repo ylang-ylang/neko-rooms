@@ -46,23 +46,31 @@ func (f *recreateRooms) GetEntry(context.Context, string) (*types.RoomEntry, err
 }
 
 func TestRecreateValidatesNetworkingBeforeRemovingExistingRoom(t *testing.T) {
-	for _, reject := range []bool{false, true} {
-		t.Run(fmt.Sprint(reject), func(t *testing.T) {
-			rooms := &recreateRooms{}
-			if reject {
-				rooms.validationError = fmt.Errorf("relay networking requires Neko API version 3")
-			}
+	for _, test := range []struct {
+		name   string
+		err    error
+		status int
+	}{
+		{"supported", nil, http.StatusOK},
+		{"policy rejection", fmt.Errorf("%w: relay networking requires Neko API version 3", types.ErrInvalidRoomSettings), http.StatusBadRequest},
+		{"Docker inspect failure", fmt.Errorf("Docker image inspection failed"), http.StatusInternalServerError},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			rooms := &recreateRooms{validationError: test.err}
 			manager := &ApiManagerCtx{rooms: rooms}
 			router := chi.NewRouter()
 			router.Post("/rooms/{roomId}/recreate", manager.roomRecreate)
 			request := httptest.NewRequest("POST", "/rooms/aaaaaaaaaaaa/recreate?start=false", nil)
 			response := httptest.NewRecorder()
 			router.ServeHTTP(response, request)
-			if reject {
-				if response.Code != http.StatusBadRequest || strings.Join(rooms.calls, ",") != "validate" || !strings.Contains(response.Body.String(), "Neko API version 3") {
-					t.Fatalf("unsupported recreation changed the existing room: HTTP %d, calls %v", response.Code, rooms.calls)
+			if response.Code != test.status {
+				t.Fatalf("HTTP %d, want %d: %s", response.Code, test.status, response.Body.String())
+			}
+			if test.err != nil {
+				if strings.Join(rooms.calls, ",") != "validate" || !strings.Contains(response.Body.String(), test.err.Error()) {
+					t.Fatalf("rejected recreation changed the existing room: HTTP %d, calls %v", response.Code, rooms.calls)
 				}
-			} else if response.Code != http.StatusOK || strings.Join(rooms.calls, ",") != "validate,remove,create" {
+			} else if strings.Join(rooms.calls, ",") != "validate,remove,create" {
 				t.Fatalf("supported explicit recreation changed: HTTP %d, calls %v", response.Code, rooms.calls)
 			}
 		})

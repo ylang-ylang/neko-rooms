@@ -38,6 +38,13 @@ func (manager *ApiManagerCtx) roomsList(w http.ResponseWriter, r *http.Request) 
 	json.NewEncoder(w).Encode(response)
 }
 
+func roomSettingsErrorStatus(err error) int {
+	if errors.Is(err, types.ErrInvalidRoomSettings) {
+		return http.StatusBadRequest
+	}
+	return http.StatusInternalServerError
+}
+
 func (manager *ApiManagerCtx) roomCreate(w http.ResponseWriter, r *http.Request) {
 	var start = true // default value
 	if s := r.URL.Query().Get("start"); s != "" {
@@ -65,7 +72,7 @@ func (manager *ApiManagerCtx) roomCreate(w http.ResponseWriter, r *http.Request)
 	ID, err := manager.rooms.Create(r.Context(), request)
 	if err != nil {
 		manager.logger.Error().Err(err).Msg("create: failed to create room")
-		http.Error(w, err.Error(), 500)
+		http.Error(w, err.Error(), roomSettingsErrorStatus(err))
 		return
 	}
 
@@ -132,7 +139,7 @@ func (manager *ApiManagerCtx) roomRecreate(w http.ResponseWriter, r *http.Reques
 	}
 
 	if err := manager.rooms.ValidateSettings(r.Context(), *settings); err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
+		http.Error(w, err.Error(), roomSettingsErrorStatus(err))
 		return
 	}
 
@@ -145,7 +152,7 @@ func (manager *ApiManagerCtx) roomRecreate(w http.ResponseWriter, r *http.Reques
 	ID, err := manager.rooms.Create(r.Context(), *settings)
 	if err != nil {
 		manager.logger.Error().Err(err).Msg("recreate: failed to create room")
-		http.Error(w, err.Error(), 500)
+		http.Error(w, err.Error(), roomSettingsErrorStatus(err))
 		return
 	}
 

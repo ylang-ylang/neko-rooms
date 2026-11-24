@@ -295,6 +295,7 @@ paths:
       tags:
         - rooms
       summary: Create new room
+      description: Unsupported network/API or native-config settings return 400; Docker and operator-configuration failures remain 500.
       operationId: roomCreate
       parameters:
         - in: query

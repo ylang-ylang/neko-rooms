@@ -186,6 +186,10 @@ type RoomEvent struct {
 
 var ErrRoomNotFound = fmt.Errorf("room not found")
 
+// ErrInvalidRoomSettings identifies rejected client settings, not Docker or
+// operator-configuration failures. HTTP handlers may map only this error to 400.
+var ErrInvalidRoomSettings = fmt.Errorf("invalid room settings")
+
 type RoomManager interface {
 	Config() RoomsConfig
 	List(ctx context.Context, labels map[string]string) ([]RoomEntry, error)
