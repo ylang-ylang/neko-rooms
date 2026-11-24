@@ -38,6 +38,30 @@ info:
     Config responses expose only the nonsecret network mode, never TURN credentials.
     Changing policy does not migrate or restart existing rooms: it affects new rooms
     and rooms explicitly recreated afterward. Legacy rooms without mode metadata are direct.
+
+    NEKO_ROOMS_NETWORK_MODE=http (CLI --network.mode=http) selects Manager-owned
+    HTTP/WSS aggregation for new or explicitly recreated API v3 rooms. No TURN
+    configuration or room HostPortBindings is needed. The official Neko image and
+    original startup argv are retained; the private startup adapter disables public
+    IP retrieval and NAT rewriting. Native frontend ICE is []; one inert backend
+    entry with no URLs suppresses Neko's automatic default-STUN fallback. Only
+    private host candidates reach the per-viewer Pion receiver. VP8/Opus is remuxed
+    into WebM, never transcoded or sent through public WebRTC. Native signaling WS
+    is private in this mode. HTTP room URLs are relative and same-origin, ignoring
+    a legacy LAN instance.url; other modes retain their existing URL behavior.
+    Use NEKO_ROOMS_PROXY=true behind a trusted ordinary HTTP/WebSocket proxy, and
+    leave NEKO_ROOMS_AGENT_PUBLIC_URL unset to infer Agent links from the request.
+
+    Public viewer endpoints below are host-relative (not under admin.path_prefix).
+    With path_prefix=/room, GET /room/{roomName}/ serves the owned aggregate.html;
+    its compiled assets are public under /__aggregate/. Native room token sessions
+    are a separate credential domain from Owner cookies and Agent Bearer keys.
+    Login forwards real POST /api/login, logout forwards real POST /api/logout,
+    and every stream validates real GET /api/whoami and identity-matched
+    system/init. Native cookie mode is unsupported and fails visibly. There is
+    no renewal endpoint. Tokens must never appear in URLs or be replaced with
+    an API/admin synthetic session. Each token permits one live viewer connection;
+    replacement waits for the old private control-release/normal-close cleanup.
 servers:
   # Added by API Auto Mocking Plugin
   - description: SwaggerHub API Auto Mocking
@@ -48,6 +72,8 @@ security:
 tags:
   - name: auth
     description: Public owner login and session endpoints
+  - name: viewer
+    description: Public native-room-authenticated HTTP/WebSocket aggregation
   - name: config
     description: config endpoints
   - name: rooms
@@ -55,6 +81,102 @@ tags:
   - name: agent
     description: Temporary per-room Agent access, protected by native management authentication
 paths:
+  /room/{roomName}/__aggregate/login:
+    post:
+      tags: [viewer]
+      operationId: aggregateRoomLogin
+      summary: Sign in as a native Neko room viewer
+      security: []
+      parameters:
+        - in: path
+          name: roomName
+          required: true
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [username, password]
+              properties:
+                username: { type: string }
+                password: { type: string, format: password }
+      responses:
+        '200':
+          description: Native ephemeral token plus normalized member; original id/profile/state may be included. Cache-Control no-store; no Owner/native cookies are forwarded or set.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [token]
+                properties:
+                  token: { type: string }
+                  member:
+                    type: object
+                    properties:
+                      id: { type: string }
+                      username: { type: string }
+        '401': { description: Native room rejected the credentials }
+        '403': { description: Foreign Origin or native login is forbidden }
+        '422': { description: Native fixed identity is already connected }
+        '502': { description: Native cookie mode unsupported or upstream invalid/unavailable }
+  /room/{roomName}/__aggregate/logout:
+    post:
+      tags: [viewer]
+      operationId: aggregateRoomLogout
+      summary: Log out the matching native room viewer and close its connections
+      security:
+        - nativeRoomToken: []
+      parameters:
+        - in: path
+          name: roomName
+          required: true
+          schema: { type: string }
+      responses:
+        '200':
+          description: Actual native POST /api/logout succeeded; only this viewer's streams are canceled.
+          content:
+            application/json:
+              schema: { type: boolean, enum: [true] }
+        '401': { description: Missing or invalid native room token }
+        '403': { description: Foreign Origin or native logout is forbidden }
+  /room/{roomName}/__aggregate/stream:
+    get:
+      tags: [viewer]
+      operationId: aggregateRoomStream
+      summary: Open the same-port authenticated viewer WebSocket
+      security: []
+      parameters:
+        - in: path
+          name: roomName
+          required: true
+          schema: { type: string }
+      description: |
+        Upgrade with same-origin ws/wss; no token, SDP or ICE in URL/query. The
+        first text message within five seconds and 4096 bytes must be
+        {type: auth, token: native-room-token}. Private resources are not opened
+        before that message. After real whoami and matching native system/init,
+        Manager sends {type: hello, mime: 'video/webm; codecs="vp8,opus"', width,
+        height, member_id}, then raw binary WebM init and complete Clusters.
+        Native control/host yields authoritative {type: state, controller_id,
+        members}; screen changes terminate the old WebM epoch for reconnect.
+        Cursor messages use type:cursor and action:position or image, with PNG
+        base64 and hotspotX/hotspotY. Native input uses private ordered DC data,
+        preserving the native IsHost check at delivery; public native signal/*
+        and raw native envelopes are not accepted.
+        Public input: control {action:request|release}; pointer
+        {action:move|down|up|wheel,x,y,button,deltaX,deltaY}; key
+        {action:down|up,key,code,repeat,altKey,ctrlKey,shiftKey,metaKey};
+        clipboard {text}. DOM keys/buttons are converted to native X11 on Manager.
+        Bounded media byte/time queues close slow viewers with 1013, discarding
+        queued bytes and requiring a fresh init/keyframe on reconnect. Permission
+        revocation/private mode/logout closes the stream and destroys public and
+        private media state. Closing a viewer normally releases native control,
+        closes native WS with 1000, and closes its private Pion connection.
+      responses:
+        '101': { description: WebSocket upgraded; this alone does not authenticate a viewer }
+        '403': { description: Origin rejected }
   /auth/status:
     get:
       tags: [auth]
@@ -522,7 +644,7 @@ paths:
       description: |
         Explicitly replaces this room using the manager's current network policy.
         The read-only network_mode in saved settings cannot override that policy.
-        Unsupported API versions (including v2 in relay mode) are rejected before
+        Unsupported API versions (including v2 in relay/http mode) are rejected before
         removing the existing container. No rooms are recreated automatically.
       operationId: roomRecreate
       parameters:
@@ -638,6 +760,10 @@ paths:
 
 components:
   securitySchemes:
+    nativeRoomToken:
+      type: http
+      scheme: bearer
+      description: Real native room token, independent of Owner and Agent credentials; WS uses the first JSON auth message instead.
     managerSession:
       type: apiKey
       in: cookie
@@ -724,7 +850,7 @@ components:
       properties:
         network_mode:
           type: string
-          enum: [direct, relay]
+          enum: [direct, relay, http]
           default: direct
           description: Policy for new or explicitly recreated rooms; existing rooms retain their actual mode. No ICE server credentials are returned.
         connections:
@@ -750,7 +876,8 @@ components:
           example: bc04dace10
         url:
           type: string
-          example: http://neko-rooms.server.lan/foobar/
+          description: Same-origin relative path in HTTP mode; existing URL behavior in direct/relay mode.
+          example: /room/foobar/
         name:
           type: string
           example: foobar
@@ -759,7 +886,7 @@ components:
           example: ghcr.io/m1k1o/neko/firefox:latest
         network_mode:
           type: string
-          enum: [direct, relay]
+          enum: [direct, relay, http]
           description: Actual policy recorded on this container; absent legacy metadata is interpreted as direct.
         is_outdated:
           type: boolean
@@ -835,10 +962,10 @@ components:
       properties:
         api_version:
           type: number
-          description: If not set, version is taken from neko_image. Relay networking requires version 3.
+          description: If not set, version is taken from neko_image. Relay and HTTP networking require version 3.
         network_mode:
           type: string
-          enum: [direct, relay]
+          enum: [direct, relay, http]
           readOnly: true
           description: Actual mode of the inspected container. Creation and explicit recreation always use the manager's current policy, not this field.
         name:
@@ -889,7 +1016,7 @@ components:
           type: string
         envs:
           type: object
-          description: Custom environment. Relay mode owns WebRTC and legacy network keys; per-room overrides cannot change the network policy or frontend TURN configuration. Explicit NEKO_CONFIG is rejected in relay mode.
+          description: Custom environment. Relay/HTTP modes own WebRTC and legacy network keys; per-room overrides cannot change network policy. Explicit NEKO_CONFIG is rejected in private modes. HTTP mode requires native token sessions and VP8/Opus.
           additionalProperties: 
             type: string
           example:

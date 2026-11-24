@@ -129,8 +129,8 @@ func (manager *RoomManagerCtx) ExportAsDockerCompose(ctx context.Context) ([]byt
 		service["container_name"] = containerName
 		service["hostname"] = containerJson.Config.Hostname
 		service["restart"] = containerJson.HostConfig.RestartPolicy.Name
-		if labels.NetworkMode == config.NetworkModeRelay {
-			// The adapter is part of relay networking, not the image's default
+		if labels.NetworkMode == config.NetworkModeRelay || labels.NetworkMode == config.NetworkModeHTTP {
+			// The adapter is part of private networking, not the image's default
 			// command. Preserve it through Compose's own $ interpolation.
 			service["entrypoint"] = composeLiteralStrings(containerJson.Config.Entrypoint)
 			service["command"] = composeLiteralStrings(containerJson.Config.Cmd)
@@ -211,7 +211,7 @@ func (manager *RoomManagerCtx) ExportAsDockerCompose(ctx context.Context) ([]byt
 
 		// environment variables
 		if len(containerJson.Config.Env) > 0 {
-			if labels.NetworkMode == config.NetworkModeRelay {
+			if labels.NetworkMode == config.NetworkModeRelay || labels.NetworkMode == config.NetworkModeHTTP {
 				service["environment"] = composeLiteralStrings(containerJson.Config.Env)
 			} else {
 				service["environment"] = containerJson.Config.Env
@@ -316,7 +316,7 @@ func (manager *RoomManagerCtx) prepareSettings(ctx context.Context, settings typ
 	if settings.ApiVersion != 2 && settings.ApiVersion != 3 {
 		return settings, nil, fmt.Errorf("%w: unsupported API version: %d", types.ErrInvalidRoomSettings, settings.ApiVersion)
 	}
-	if manager.config.EffectiveNetworkMode() == config.NetworkModeRelay {
+	if mode := manager.config.EffectiveNetworkMode(); mode == config.NetworkModeRelay || mode == config.NetworkModeHTTP {
 		if image == nil {
 			inspect, err := manager.client.ImageInspect(ctx, settings.NekoImage)
 			if err != nil {
@@ -324,7 +324,7 @@ func (manager *RoomManagerCtx) prepareSettings(ctx context.Context, settings typ
 			}
 			image = &inspect
 		}
-		if err := validateRelaySettings(settings, image); err != nil {
+		if err := validatePrivateSettings(settings, image, mode); err != nil {
 			return settings, nil, fmt.Errorf("%w: %s", types.ErrInvalidRoomSettings, err)
 		}
 	}
@@ -426,7 +426,7 @@ func (manager *RoomManagerCtx) Create(ctx context.Context, settings types.RoomSe
 
 	pathPrefix := path.Join("/", manager.config.PathPrefix, roomName)
 
-	if t := manager.config.Traefik; t.Enabled {
+	if t := manager.config.Traefik; t.Enabled && manager.config.EffectiveNetworkMode() != config.NetworkModeHTTP {
 		// create traefik rule
 		traefikRule := "PathPrefix(`" + pathPrefix + "`)"
 		if t.Domain != "" && t.Domain != "*" {
@@ -487,6 +487,12 @@ func (manager *RoomManagerCtx) Create(ctx context.Context, settings types.RoomSe
 			continue // this label must describe the actual generated network policy
 		}
 		labels[key] = val
+	}
+
+	// HTTP aggregation is routed exclusively through Manager, never directly
+	// from a Docker-aware edge proxy to a room's native viewer/signaling UI.
+	if manager.config.EffectiveNetworkMode() == config.NetworkModeHTTP {
+		labels["traefik.enable"] = "false"
 	}
 
 	//
@@ -695,8 +701,8 @@ func (manager *RoomManagerCtx) Create(ctx context.Context, settings types.RoomSe
 		Labels: labels,
 	}
 
-	if manager.config.EffectiveNetworkMode() == "relay" {
-		config.Entrypoint, config.Cmd = relayContainerCommand(image)
+	if mode := manager.config.EffectiveNetworkMode(); mode == "relay" || mode == "http" {
+		config.Entrypoint, config.Cmd = privateContainerCommand(image, mode)
 	}
 
 	hostConfig := &dockerContainer.HostConfig{

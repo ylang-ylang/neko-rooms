@@ -2,7 +2,9 @@
 
 ## Networking modes
 
-`NEKO_ROOMS_NETWORK_MODE=direct` is the default; the public per-room port/NAT guidance below describes **direct** mode. For the relay-capable fork's fixed HTTPS + TURN/TLS listeners, private TURN allocation pool, required real gateway/domain/certificate, and explicit activation/rollback, use the [relay deployment example](../examples/relay/). Switching the manager's mode does not automatically recreate/migrate manager-created dynamic rooms; its policy applies only to new/recreated rooms. TrueNAS activation/rollback uses official `app.update` with Custom App YAML and recreates all App-owned services (including the default browser), not those dynamic children; see the example's platform-specific workflow.
+`NEKO_ROOMS_NETWORK_MODE=direct` remains the default; the per-room port/NAT guidance below describes **direct** mode. For the NAS's single ordinary HTTP(S)/WebSocket entry, select **`http`** and use the [HTTP desktop setup](../README.md#one-entry-httpwebsocket-desktop-nas-mode): no browser WebRTC, TURN service or second public media port. Its public room URL is `/room/<name>/`, with compiled assets under `/__aggregate/`; private Manager↔Neko media stays inside the room network. VP8/Opus, native token sessions and WebM/MSE playback are required; microphone/webcam upload is unsupported.
+
+**`relay` is optional and different:** the [relay example](../examples/relay/) uses separate HTTPS + TURN/TLS listeners and private TURN allocations; it is not needed for `http`. Switching policy affects only new/explicitly recreated dynamic rooms, not running children or their Profile/Downloads data. TrueNAS activation/rollback uses official `app.update` with Custom App YAML and recreates all App-owned services (including the default browser), not those dynamic children; see the example's platform-specific lifecycle instructions.
 
 ## Direct networking
 

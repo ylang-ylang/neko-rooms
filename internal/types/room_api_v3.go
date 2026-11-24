@@ -38,7 +38,7 @@ var blacklistedEnvsV3 = []string{
 	"NEKO_WEBRTC_ICELITE",
 }
 
-// Neko v3 still recognizes these v2 network aliases. In relay mode they must
+// Neko v3 still recognizes these v2 network aliases. In private modes they must
 // not override native v3 settings after Neko has loaded the authoritative policy.
 var relayNetworkEnvsV3 = []string{
 	"NEKO_WEBRTC_ICESERVERS",
@@ -59,8 +59,8 @@ var relayNetworkEnvsV3 = []string{
 
 // IsManagedEnvV3 identifies configuration owned by the manager rather than a
 // custom room override. The same policy guards native image CLI arguments.
-func IsManagedEnvV3(key string, relay bool) bool {
-	return slices.Contains(blacklistedEnvsV3, key) || (relay && slices.Contains(relayNetworkEnvsV3, key))
+func IsManagedEnvV3(key string, private bool) bool {
+	return slices.Contains(blacklistedEnvsV3, key) || (private && slices.Contains(relayNetworkEnvsV3, key))
 }
 
 func (settings *RoomSettings) toEnvV3(cfg *config.Room, ports PortSettings) ([]string, error) {
@@ -77,18 +77,28 @@ func (settings *RoomSettings) toEnvV3(cfg *config.Room, ports PortSettings) ([]s
 		//fmt.Sprintf("NEKO_MAX_FPS=%d", settings.VideoMaxFPS), // TODO: not supported yet
 	}
 
-	relay := cfg.EffectiveNetworkMode() == config.NetworkModeRelay
-	if relay {
-		frontendICE, err := cfg.RelayFrontendICEJSON()
-		if err != nil {
-			return nil, err
+	mode := cfg.EffectiveNetworkMode()
+	relay := mode == config.NetworkModeRelay
+	private := relay || mode == config.NetworkModeHTTP
+	if private {
+		frontendICE, backendICE, iceLite := "[]", `[{"urls":[]}]`, "true"
+		if relay {
+			var err error
+			frontendICE, err = cfg.RelayFrontendICEJSON()
+			if err != nil {
+				return nil, err
+			}
+			backendICE, iceLite = "[]", "false"
 		}
+		// Pinned Neko injects default public STUN when both lists have length
+		// zero. One inert backend entry prevents that fallback; ICE-lite
+		// ignores the backend, and there is no endpoint to dial in any case.
 		env = append(env,
-			"NEKO_WEBRTC_ICELITE=false",
+			"NEKO_WEBRTC_ICELITE="+iceLite,
 			"NEKO_WEBRTC_NAT1TO1=",
 			"NEKO_WEBRTC_IP_RETRIEVAL_URL=",
 			"NEKO_WEBRTC_ICESERVERS_FRONTEND="+frontendICE,
-			"NEKO_WEBRTC_ICESERVERS_BACKEND=[]",
+			"NEKO_WEBRTC_ICESERVERS_BACKEND="+backendICE,
 			"NEKO_LEGACY=false",
 			// Pinned Neko logs TURN credentials at info/debug. An explicit
 			// per-room log level may opt in using normal custom precedence.
@@ -117,7 +127,7 @@ func (settings *RoomSettings) toEnvV3(cfg *config.Room, ports PortSettings) ([]s
 	}
 
 	// Direct NAT mapping is deliberately not inherited by relay rooms.
-	if !relay && len(cfg.NAT1To1IPs) > 0 {
+	if !private && len(cfg.NAT1To1IPs) > 0 {
 		env = append(env, fmt.Sprintf("NEKO_WEBRTC_NAT1TO1=%s", strings.Join(cfg.NAT1To1IPs, ",")))
 	}
 
@@ -172,7 +182,7 @@ func (settings *RoomSettings) toEnvV3(cfg *config.Room, ports PortSettings) ([]s
 		// Docker interprets everything before the first '=' as the name, even
 		// when a caller incorrectly includes '=' in a custom map key.
 		envKey, _, _ := strings.Cut(key, "=")
-		if IsManagedEnvV3(envKey, relay) {
+		if IsManagedEnvV3(envKey, private) {
 			continue
 		}
 		entry := fmt.Sprintf("%s=%s", key, val)
@@ -213,7 +223,7 @@ func (settings *RoomSettings) fromEnvV3(envs []string) error {
 		case "NEKO_LOG_LEVEL":
 			// The relay default is policy, not a custom room setting. Keep
 			// explicit nondefault levels so recreation preserves the opt-in.
-			if settings.NetworkMode != config.NetworkModeRelay || val != "warn" {
+			if (settings.NetworkMode != config.NetworkModeRelay && settings.NetworkMode != config.NetworkModeHTTP) || val != "warn" {
 				settings.Envs[key] = val
 			}
 		//case "NEKO_MAX_FPS": // TODO: not supported yet
@@ -233,7 +243,7 @@ func (settings *RoomSettings) fromEnvV3(envs []string) error {
 		case "NEKO_CAPTURE_AUDIO_PIPELINE":
 			settings.AudioPipeline = val
 		default:
-			if !IsManagedEnvV3(key, settings.NetworkMode == config.NetworkModeRelay) {
+			if !IsManagedEnvV3(key, settings.NetworkMode == config.NetworkModeRelay || settings.NetworkMode == config.NetworkModeHTTP) {
 				settings.Envs[key] = val
 			}
 		}

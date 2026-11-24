@@ -52,7 +52,7 @@ type Room struct {
 }
 
 func (Room) Init(cmd *cobra.Command) error {
-	cmd.PersistentFlags().String("network.mode", NetworkModeDirect, "room networking: direct (publish media ports) or relay (Neko v3 with frontend TURN)")
+	cmd.PersistentFlags().String("network.mode", NetworkModeDirect, "room networking: direct (publish media ports), relay (Neko v3 with frontend TURN), or http (Manager aggregation, private ICE)")
 	if err := viper.BindPFlag("network.mode", cmd.PersistentFlags().Lookup("network.mode")); err != nil {
 		return err
 	}
@@ -337,6 +337,10 @@ func (s *Room) GetInstanceUrl() url.URL {
 }
 
 func (s *Room) GetRoomUrl(roomName string) string {
+	if s.EffectiveNetworkMode() == NetworkModeHTTP {
+		// The public proxy needs no permanent domain/LAN address in room URLs.
+		return path.Join("/", s.PathPrefix, roomName) + "/"
+	}
 	instanceUrl := s.GetInstanceUrl()
 
 	if after, ok := strings.CutPrefix(instanceUrl.Host, "*."); ok {

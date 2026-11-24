@@ -19,19 +19,21 @@ import (
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
 
+	"github.com/m1k1o/neko-rooms/internal/aggregate"
 	"github.com/m1k1o/neko-rooms/internal/config"
 	"github.com/m1k1o/neko-rooms/internal/types"
 )
 
 type ServerManagerCtx struct {
-	logger zerolog.Logger
-	router *chi.Mux
-	server *http.Server
-	config *config.Server
-	auth   *adminAuth
+	logger    zerolog.Logger
+	router    *chi.Mux
+	server    *http.Server
+	config    *config.Server
+	auth      *adminAuth
+	aggregate *aggregate.Gateway
 }
 
-func New(ApiManager types.ApiManager, roomConfig *config.Room, config *config.Server, proxyHandler http.Handler, agentHandler http.Handler) *ServerManagerCtx {
+func New(ApiManager types.ApiManager, roomConfig *config.Room, config *config.Server, proxyHandler http.Handler, agentHandler http.Handler, aggregation ...*aggregate.Gateway) *ServerManagerCtx {
 	logger := log.With().Str("module", "server").Logger()
 	auth := newAdminAuth(config)
 	// Room/CDP dispatch must not receive owner cookies or cached form-mode
@@ -50,6 +52,25 @@ func New(ApiManager types.ApiManager, roomConfig *config.Room, config *config.Se
 	// add http logger
 	router.Use(middleware.RequestLogger(&logformatter{logger}))
 	router.Use(middleware.Recoverer) // Recover from panics without crashing server
+
+	var viewerGateway *aggregate.Gateway
+	if len(aggregation) != 0 {
+		viewerGateway = aggregation[0]
+	}
+	if viewerGateway != nil {
+		// Reserve owned viewer assets before the deprecated root static-file
+		// management gate. Owner routes and their credential policy stay intact.
+		router.Use(func(next http.Handler) http.Handler {
+			viewer := viewerGateway.Middleware(next)
+			return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if auth.isAuthPath(r.URL.Path) || auth.isAPIPath(r.URL.Path) || (auth.prefix != "" && (r.URL.Path == auth.prefix || strings.HasPrefix(r.URL.Path, auth.root()))) {
+					next.ServeHTTP(w, r)
+					return
+				}
+				viewer.ServeHTTP(w, r)
+			})
+		})
+	}
 
 	// Basic CORS
 	if config.CORS {
@@ -186,8 +207,9 @@ func New(ApiManager types.ApiManager, roomConfig *config.Room, config *config.Se
 			Addr:    config.Bind,
 			Handler: router,
 		},
-		config: config,
-		auth:   auth,
+		config:    config,
+		auth:      auth,
+		aggregate: viewerGateway,
 	}
 }
 
@@ -210,6 +232,9 @@ func (s *ServerManagerCtx) Start() {
 }
 
 func (s *ServerManagerCtx) Shutdown() error {
+	if s.aggregate != nil {
+		s.aggregate.Shutdown()
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 

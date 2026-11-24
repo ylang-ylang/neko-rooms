@@ -36,12 +36,19 @@ export NEKO_CONFIG="$relay_config"
 exec "$@"
 `
 
-func validateRelaySettings(settings types.RoomSettings, image *dockerImage.InspectResponse) error {
+func validatePrivateSettings(settings types.RoomSettings, image *dockerImage.InspectResponse, mode string) error {
+	if err := validatePrivateImage(settings, image, mode); err != nil {
+		return fmt.Errorf("%s networking %s", mode, err)
+	}
+	return nil
+}
+
+func validatePrivateImage(settings types.RoomSettings, image *dockerImage.InspectResponse, mode string) error {
 	if image.Config == nil || len(image.Config.Entrypoint)+len(image.Config.Cmd) == 0 {
-		return fmt.Errorf("relay networking requires an image with an inspectable startup command")
+		return fmt.Errorf("requires an image with an inspectable startup command")
 	}
 	if version, ok := image.Config.Labels["net.m1k1o.neko.api-version"]; ok && version != "3" {
-		return fmt.Errorf("relay networking requires a Neko API version 3 image; the image metadata reports a different version")
+		return fmt.Errorf("requires a Neko API version 3 image; the image metadata reports a different version")
 	}
 	// Native flags outrank both env and the generated config. Refuse managed
 	// keys rather than silently losing the relay invariant to image argv. Also
@@ -57,15 +64,15 @@ func validateRelaySettings(settings types.RoomSettings, image *dockerImage.Inspe
 					continue
 				}
 				key := "NEKO_" + strings.ToUpper(strings.ReplaceAll(strings.TrimPrefix(flag, "--"), ".", "_"))
-				if types.IsManagedEnvV3(key, true) {
-					return fmt.Errorf("relay networking cannot use image CLI overrides of manager-owned Neko settings (use direct mode to retain them)")
+				if types.IsManagedEnvV3(key, true) || (mode == "http" && (key == "NEKO_SESSION_COOKIE_ENABLED" || key == "NEKO_CAPTURE_VIDEO_CODEC" || key == "NEKO_CAPTURE_AUDIO_CODEC")) {
+					return fmt.Errorf("cannot use image CLI overrides of manager-owned Neko settings (use direct mode to retain them)")
 				}
 			}
 		}
 	}
 	for _, entry := range image.Config.Env {
 		if name, value, _ := strings.Cut(entry, "="); name == "NEKO_CONFIG" && value != "" {
-			return fmt.Errorf("relay networking cannot replace an image's custom NEKO_CONFIG (use direct mode to retain it)")
+			return fmt.Errorf("cannot replace an image's custom NEKO_CONFIG (use direct mode to retain it)")
 		}
 	}
 	workingDir := image.Config.WorkingDir
@@ -78,7 +85,7 @@ func validateRelaySettings(settings types.RoomSettings, image *dockerImage.Inspe
 			for _, extension := range strings.Fields(nekoConfigExtensions) {
 				file := path.Join(directory, "neko."+extension)
 				if target == "/" || target == file || strings.HasPrefix(file, target+"/") {
-					return fmt.Errorf("relay networking cannot hide a mounted native Neko config (use direct mode to retain it)")
+					return fmt.Errorf("cannot hide a mounted native Neko config (use direct mode to retain it)")
 				}
 			}
 		}
@@ -86,11 +93,11 @@ func validateRelaySettings(settings types.RoomSettings, image *dockerImage.Inspe
 	return nil
 }
 
-func relayContainerCommand(image *dockerImage.InspectResponse) (entrypoint, command []string) {
+func privateContainerCommand(image *dockerImage.InspectResponse, mode string) (entrypoint, command []string) {
 	entrypoint = []string{"/bin/sh", "-c"}
 	// sh -c consumes the next argument as $0. All original image argv follow it
 	// unchanged as $@; exec preserves PID 1 and the image's signal semantics.
-	command = []string{relayStartupScript, "neko-rooms-relay"}
+	command = []string{strings.ReplaceAll(relayStartupScript, "relay", mode), "neko-rooms-" + mode}
 	command = append(command, image.Config.Entrypoint...)
 	command = append(command, image.Config.Cmd...)
 	return entrypoint, command

@@ -2,6 +2,7 @@ package room
 
 import (
 	"fmt"
+	"path"
 	"regexp"
 	"strconv"
 	"strings"
@@ -107,10 +108,20 @@ func (manager *RoomManagerCtx) extractLabels(labels map[string]string) (*RoomLab
 	// Containers created before network policies existed used published ports.
 	networkMode := config.NetworkModeDirect
 	if value, ok := labels[networkModeLabel]; ok {
-		if value != config.NetworkModeDirect && value != config.NetworkModeRelay {
+		if value != config.NetworkModeDirect && value != config.NetworkModeRelay && value != config.NetworkModeHTTP {
 			return nil, fmt.Errorf("damaged container labels: invalid network_mode")
 		}
 		networkMode = value
+	}
+
+	if networkMode == config.NetworkModeHTTP {
+		// HTTP rooms are same-origin even when adopted labels or instance.url
+		// retain the operator's old LAN address. Other modes keep their URLs.
+		url = path.Join("/", manager.config.PathPrefix, name) + "/"
+	} else if _, present := labels["m1k1o.neko_rooms.url"]; !present {
+		cfg := *manager.config
+		cfg.NetworkMode = networkMode
+		url = cfg.GetRoomUrl(name)
 	}
 
 	var browserPolicy *BrowserPolicyLabels

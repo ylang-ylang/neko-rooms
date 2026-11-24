@@ -13,6 +13,7 @@ import (
 const (
 	NetworkModeDirect = "direct"
 	NetworkModeRelay  = "relay"
+	NetworkModeHTTP   = "http"
 )
 
 // EffectiveNetworkMode preserves direct networking for existing Go callers that
@@ -26,12 +27,12 @@ func (s *Room) EffectiveNetworkMode() string {
 
 func (s *Room) ValidateNetworking() error {
 	switch s.EffectiveNetworkMode() {
-	case NetworkModeDirect, NetworkModeRelay:
+	case NetworkModeDirect, NetworkModeRelay, NetworkModeHTTP:
 	default:
-		return fmt.Errorf("invalid network.mode: expected direct or relay")
+		return fmt.Errorf("invalid network.mode: expected direct, relay or http")
 	}
 
-	if s.EffectiveNetworkMode() == NetworkModeRelay || s.RelayICEServersFrontend != "" {
+	if s.EffectiveNetworkMode() == NetworkModeRelay || (s.EffectiveNetworkMode() == NetworkModeDirect && s.RelayICEServersFrontend != "") {
 		_, err := s.RelayFrontendICEJSON()
 		return err
 	}

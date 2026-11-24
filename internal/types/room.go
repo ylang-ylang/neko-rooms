@@ -100,13 +100,39 @@ func (settings *RoomSettings) ValidateNetworkPolicy(cfg *config.Room) error {
 	if err := cfg.ValidateNetworking(); err != nil {
 		return err
 	}
-	if cfg.EffectiveNetworkMode() == config.NetworkModeRelay {
+	mode := cfg.EffectiveNetworkMode()
+	if mode == config.NetworkModeRelay || mode == config.NetworkModeHTTP {
 		if settings.ApiVersion != 3 {
-			return fmt.Errorf("relay networking requires Neko API version 3")
+			return fmt.Errorf("%s networking requires Neko API version 3", mode)
 		}
 		for key := range settings.Envs {
 			if name, _, _ := strings.Cut(key, "="); name == "NEKO_CONFIG" {
-				return fmt.Errorf("relay networking manages NEKO_CONFIG; custom native Neko config files are unsupported (use direct mode to retain one)")
+				return fmt.Errorf("%s networking manages NEKO_CONFIG; custom native Neko config files are unsupported (use direct mode to retain one)", mode)
+			}
+		}
+	}
+	if mode == config.NetworkModeHTTP {
+		if settings.VideoCodec != "" && !strings.EqualFold(settings.VideoCodec, "VP8") {
+			return fmt.Errorf("http aggregation requires VP8 video")
+		}
+		if settings.AudioCodec != "" && !strings.EqualFold(settings.AudioCodec, "OPUS") {
+			return fmt.Errorf("http aggregation requires Opus audio")
+		}
+		for key, value := range settings.Envs {
+			name, _, _ := strings.Cut(key, "=")
+			switch name {
+			case "NEKO_SESSION_COOKIE_ENABLED":
+				if value != "" && value != "false" {
+					return fmt.Errorf("http aggregation requires native token sessions; cookie mode is unsupported")
+				}
+			case "NEKO_CAPTURE_VIDEO_CODEC":
+				if value != "" && !strings.EqualFold(value, "vp8") {
+					return fmt.Errorf("http aggregation requires VP8 video")
+				}
+			case "NEKO_CAPTURE_AUDIO_CODEC":
+				if value != "" && !strings.EqualFold(value, "opus") {
+					return fmt.Errorf("http aggregation requires Opus audio")
+				}
 			}
 		}
 	}

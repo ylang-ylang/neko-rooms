@@ -223,7 +223,7 @@ export interface RoomEntry {
      * @type {string}
      * @memberof RoomEntry
      */
-    'network_mode'?: 'direct' | 'relay';
+    'network_mode'?: 'direct' | 'relay' | 'http';
     /**
      * 
      * @type {string}
@@ -417,7 +417,7 @@ export interface RoomSettings {
      * @type {string}
      * @memberof RoomSettings
      */
-    readonly 'network_mode'?: 'direct' | 'relay';
+    readonly 'network_mode'?: 'direct' | 'relay' | 'http';
     /**
      * if not set, version is taken from neko_image
      * @type {number}
@@ -641,7 +641,7 @@ export interface RoomsConfig {
      * @type {string}
      * @memberof RoomsConfig
      */
-    'network_mode'?: 'direct' | 'relay';
+    'network_mode'?: 'direct' | 'relay' | 'http';
     /**
      * 
      * @type {number}

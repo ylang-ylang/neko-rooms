@@ -12,6 +12,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/m1k1o/neko-rooms/internal/agent"
+	"github.com/m1k1o/neko-rooms/internal/aggregate"
 	"github.com/m1k1o/neko-rooms/internal/api"
 	"github.com/m1k1o/neko-rooms/internal/config"
 	"github.com/m1k1o/neko-rooms/internal/proxy"
@@ -108,13 +109,14 @@ type MainCtx struct {
 	Version *Version
 	Configs *Configs
 
-	logger        zerolog.Logger
-	roomManager   *room.RoomManagerCtx
-	pullManager   *pull.PullManagerCtx
-	apiManager    *api.ApiManagerCtx
-	agentManager  *agent.Manager
-	proxyManager  *proxy.ProxyManagerCtx
-	serverManager *server.ServerManagerCtx
+	logger           zerolog.Logger
+	roomManager      *room.RoomManagerCtx
+	pullManager      *pull.PullManagerCtx
+	apiManager       *api.ApiManagerCtx
+	agentManager     *agent.Manager
+	aggregateManager *aggregate.Gateway
+	proxyManager     *proxy.ProxyManagerCtx
+	serverManager    *server.ServerManagerCtx
 }
 
 func (main *MainCtx) Preflight() {
@@ -162,12 +164,16 @@ func (main *MainCtx) Start() {
 	)
 	main.proxyManager.Start()
 
+	main.aggregateManager = server.NewAggregation(main.roomManager, main.Configs.Room, main.Configs.Server, aggregate.PionFactory{})
+	main.aggregateManager.WatchRooms(main.roomManager)
+
 	main.serverManager = server.New(
 		main.apiManager,
 		main.Configs.Room,
 		main.Configs.Server,
 		main.proxyManager,
 		main.agentManager,
+		main.aggregateManager,
 	)
 	main.serverManager.Start()
 }
