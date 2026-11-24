@@ -39,6 +39,14 @@ func (c *rtpClock) anchor(timestamp uint32, at time.Time) {
 	c.lastPTS = c.anchorMS - 1
 }
 func (c *rtpClock) senderReport(report *rtcp.SenderReport) {
+	// Pinned Pion emits SRs before the first RTP packet. Its sender clock is
+	// still zero-initialized then, so that report's RTPTime is not a mapping
+	// for the eventual random RTP origin. Cold native capture can take longer
+	// than the first SR interval. Keep arrival anchoring until media was sent;
+	// a later empty report must not replace an already valid mapping either.
+	if report.PacketCount == 0 && report.OctetCount == 0 {
+		return
+	}
 	copy := *report
 	c.mu.Lock()
 	defer c.mu.Unlock()

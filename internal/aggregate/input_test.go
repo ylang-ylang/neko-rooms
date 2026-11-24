@@ -190,7 +190,7 @@ func TestRTPClockUnwrapsBeyondHalfPeriodAndUsesSenderReports(t *testing.T) {
 	clock = &rtpClock{origin: origin, rate: 90000}
 	clock.anchor(1000, origin)
 	ntpSeconds := uint64(origin.Unix() + 2208988800)
-	clock.senderReport(&rtcp.SenderReport{RTPTime: 1000, NTPTime: ntpSeconds<<32 | uint64(1<<32/10)}) // common SR is +100ms
+	clock.senderReport(&rtcp.SenderReport{RTPTime: 1000, NTPTime: ntpSeconds<<32 | uint64(1<<32/10), PacketCount: 1, OctetCount: 100}) // media-backed common SR is +100ms
 	pts, err := clock.timestamp(10000)
 	if err != nil || pts <= 100 || pts > 110 {
 		t.Fatalf("SR wasn't slewed with monotonic bound: %d %v", pts, err)
