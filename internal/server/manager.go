@@ -10,6 +10,7 @@ import (
 	"os"
 	"path"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -248,10 +249,17 @@ func New(ApiManager types.ApiManager, roomConfig *config.Room, config *config.Se
 		logger.Info().Msgf("with metrics endpoint")
 	}
 
-	// Agent CDP has its own temporary Bearer authentication, not native admin
-	// or legacy room/Basic authentication. Reserve it before the room fallback.
-	router.Handle("/rooms/{roomName}/*", agentHandler)
-	router.Handle("/rooms/{roomName}", agentHandler)
+	// Reserve only CDP endpoints: existing room UI/signaling may also live
+	// under /rooms/. Keep the full wildcard for the Agent's upstream path.
+	router.HandleFunc("/rooms/{roomName}/*", func(w http.ResponseWriter, r *http.Request) {
+		rest := chi.URLParam(r, "*")
+		if rest == "json" || strings.HasPrefix(rest, "json/") || strings.HasPrefix(rest, "devtools/") {
+			agentHandler.ServeHTTP(w, r)
+			return
+		}
+		proxyHandler.ServeHTTP(w, r)
+	})
+	router.Handle("/rooms/{roomName}", proxyHandler)
 
 	// handle all remaining paths with proxy
 	router.Handle("/*", proxyHandler)

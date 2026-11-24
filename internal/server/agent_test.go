@@ -90,6 +90,55 @@ func TestAgentManagementUsesNativeAdminAuthButPublicCDPDoesNot(t *testing.T) {
 	}
 }
 
+func TestAgentRoutesPreserveRoomUIAndSignalingFallback(t *testing.T) {
+	for _, prefix := range []string{"/manage", "/"} {
+		t.Run(prefix, func(t *testing.T) {
+			rooms := agentTestRooms{}
+			agentManager, err := agent.New(rooms, "")
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer agentManager.Shutdown()
+			manager := New(api.New(rooms, nil, agentManager), &config.Room{}, &config.Server{
+				Admin: config.Admin{PathPrefix: prefix, Username: "native-admin", Password: "native-password"},
+			}, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.Header().Set("X-Room-Proxy-Path", r.URL.Path)
+				w.WriteHeader(http.StatusTeapot)
+			}), agentManager)
+
+			// Both a /rooms room prefix and a room named "rooms" under the
+			// default prefix must keep their UI assets and signaling routes.
+			for _, path := range []string{
+				"/rooms", "/rooms/", "/rooms/index.html", "/rooms/ws",
+				"/rooms/stable", "/rooms/stable/", "/rooms/stable/index.html",
+				"/rooms/stable/ws", "/rooms/stable/json-assets.js",
+			} {
+				r := httptest.NewRequest("GET", path, nil)
+				if strings.HasSuffix(path, "/ws") {
+					r.Header.Set("Connection", "Upgrade")
+					r.Header.Set("Upgrade", "websocket")
+				}
+				w := httptest.NewRecorder()
+				manager.router.ServeHTTP(w, r)
+				if w.Code != http.StatusTeapot || w.Header().Get("X-Room-Proxy-Path") != path {
+					t.Errorf("room UI/signaling %s did not reach the unchanged proxy: HTTP %d", path, w.Code)
+				}
+			}
+
+			for _, path := range []string{
+				"/rooms/stable/json", "/rooms/stable/json/", "/rooms/stable/json/version",
+				"/rooms/stable/devtools/browser/existing", "/rooms/stable/devtools/page/existing",
+			} {
+				w := httptest.NewRecorder()
+				manager.router.ServeHTTP(w, httptest.NewRequest("GET", path, nil))
+				if w.Code != http.StatusUnauthorized || w.Header().Get("WWW-Authenticate") != "Bearer" || w.Header().Get("X-Room-Proxy-Path") != "" {
+					t.Errorf("CDP %s bypassed temporary Bearer authentication: HTTP %d", path, w.Code)
+				}
+			}
+		})
+	}
+}
+
 func TestPublicCDPDoesNotCallNativeProxyAuthentication(t *testing.T) {
 	var authCalls atomic.Int64
 	auth := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
