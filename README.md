@@ -37,6 +37,8 @@ This fork adds temporary, per-room Chromium DevTools Protocol (CDP) access to th
 
 Open `/manage/` and sign in with the **same** `NEKO_ROOMS_ADMIN_USERNAME` / `NEKO_ROOMS_ADMIN_PASSWORD` already configured (`admin` is the default username). Local credentials default to `NEKO_ROOMS_ADMIN_AUTH_MODE=form`: a normal HTML form submits by POST, with named username/password fields and `autocomplete="username"` / `autocomplete="current-password"` for password managers. Form mode never accepts or challenges with HTTP Basic. Set `NEKO_ROOMS_ADMIN_AUTH_MODE=basic` explicitly for the legacy browser prompt; `NEKO_ROOMS_ADMIN_PROXY_AUTH` still takes precedence. Without credentials or proxy auth, management remains unauthenticated.
 
+**Startup compatibility:** A partial username/password pair now fails startup instead of silently opening management. Configure both (the default username is `admin`) or intentionally neither.
+
 The host-only, HttpOnly, SameSite=Lax owner cookie lasts **7 days**; sessions live only in manager RAM. **Restarting the manager requires signing in again.** Use **退出登录** in the header to revoke the session; expired/revoked sessions return to the login page. HTTPS (or HTTPS forwarded by an explicitly trusted `NEKO_ROOMS_PROXY=true` proxy) adds the Secure cookie flag. `GET /manage/auth/status` returns `{mode, authenticated, username?, login_url, logout_url}` without exposing credentials or session tokens.
 
 Programmatic owner API clients must first POST the form and retain its cookie, not use an Agent Bearer key. Login, logout and all mutating owner API requests require an `Origin` (or `Referer`) matching the manager's scheme, host **and port**. For example, with `OWNER_USERNAME` and `OWNER_PASSWORD` set to the existing credentials:
