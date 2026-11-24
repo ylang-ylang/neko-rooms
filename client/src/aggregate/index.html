@@ -1,0 +1,51 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width,initial-scale=1">
+    <meta name="referrer" content="no-referrer">
+    <title>Room desktop · n.eko</title>
+  </head>
+  <body>
+    <main>
+      <header class="room-header">
+        <div><p class="eyebrow">n.eko / room desktop</p><h1 id="room-name">Room desktop</h1></div>
+        <button id="logout" type="button" hidden>Sign out</button>
+      </header>
+      <div class="connection" role="status" aria-live="polite"><span id="status">Sign in to the room.</span><button id="reconnect" type="button" hidden>Reconnect</button></div>
+      <form id="login" class="login-card">
+        <h2>Join this room</h2>
+        <p>Use your room username and password.</p>
+        <label for="username">Username</label>
+        <input id="username" name="username" autocomplete="username" maxlength="128" required autofocus>
+        <label for="password">Room password</label>
+        <input id="password" name="password" type="password" autocomplete="current-password" required>
+        <button id="join" class="primary" type="submit">Join room</button>
+      </form>
+      <section id="viewer" aria-label="Remote desktop viewer" hidden>
+        <div class="toolbar">
+          <span id="control-status" role="status">View only</span>
+          <button id="control" type="button">Request control</button>
+          <div class="spacer"></div>
+          <button id="audio" type="button">Unmute / play</button>
+          <label class="volume">Volume<input id="volume" type="range" min="0" max="1" step="0.05" value="0.8" aria-label="Desktop audio volume"></label>
+          <button id="fullscreen" type="button">Fullscreen</button>
+        </div>
+        <div id="desktop" tabindex="0" role="application" aria-label="Remote desktop. Click to focus keyboard input when you have control." aria-describedby="input-hint">
+          <video id="video" autoplay muted playsinline disablepictureinpicture aria-label="Live full remote desktop"></video>
+          <img id="cursor" alt="" draggable="false" hidden>
+        </div>
+        <p id="input-hint" class="hint">Request control, then click the desktop to type. Click outside to stop keyboard capture. Some browser shortcuts remain local.</p>
+        <details class="clipboard">
+          <summary>Remote clipboard</summary>
+          <label for="clipboard-text">Paste text here to send to the remote clipboard</label>
+          <textarea id="clipboard-text" rows="3" placeholder="Text for this room only" autocomplete="off" spellcheck="false"></textarea>
+          <button id="clipboard-send" type="button" disabled>Send clipboard</button>
+          <span class="hint">Then press Ctrl+V in the desktop to paste.</span>
+        </details>
+      </section>
+      <p id="notice" class="hint" role="status" aria-live="polite"></p>
+      <noscript>Enable JavaScript to sign in and view this desktop.</noscript>
+    </main>
+  </body>
+</html>

@@ -1,0 +1,54 @@
+:root { color-scheme: dark; font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; color: #ecf1f7; background: #11161e; }
+* { box-sizing: border-box; }
+[hidden] { display: none !important; }
+body { margin: 0; }
+main { max-width: 1500px; margin: 0 auto; padding: 1.25rem; }
+h1 { margin: 0; font-size: 1.6rem; font-weight: 600; overflow-wrap: anywhere; }
+h2 { font-size: 1.25rem; margin: 0 0 .5rem; }
+p { line-height: 1.5; }
+button, input, textarea { font: inherit; }
+button { background: #252f3f; color: inherit; border: 1px solid #46556c; padding: .5rem .85rem; border-radius: .4rem; cursor: pointer; white-space: nowrap; }
+button:hover:not(:disabled) { background: #344157; }
+button:disabled { opacity: .45; cursor: not-allowed; }
+button.primary { background: #3167ba; border-color: #5c8cda; }
+button.primary:hover:not(:disabled) { background: #4179cc; }
+input, textarea { border: 1px solid #46556c; border-radius: .35rem; background: #111822; color: inherit; padding: .6rem; }
+:focus-visible { outline: 2px solid #8dbaff; outline-offset: 3px; }
+.room-header { display: flex; align-items: center; justify-content: space-between; gap: 1rem; margin-bottom: 1rem; }
+.eyebrow { color: #a5b4c8; text-transform: uppercase; font-size: .7rem; letter-spacing: .1em; margin: 0 0 .35rem; }
+.connection { color: #acbdd4; display: flex; align-items: center; gap: 1rem; min-height: 2.5rem; margin-bottom: 1rem; }
+.connection.error { color: #ffb8ad; }
+.login-card { max-width: 25rem; margin: 3rem auto; padding: 1.6rem; background: #1a2331; border: 1px solid #354258; border-radius: .65rem; display: grid; gap: .75rem; }
+.login-card p { margin: 0 0 .5rem; color: #b5c1d3; }
+.login-card label { font-size: .9rem; }
+.login-card .primary { margin-top: .5rem; }
+#viewer { display: flex; flex-direction: column; border: 1px solid #354258; border-radius: .6rem; overflow: hidden; background: #17202c; }
+.toolbar { display: flex; align-items: center; flex-wrap: wrap; gap: .65rem; padding: .7rem; }
+#control-status { font-size: .9rem; overflow-wrap: anywhere; }
+.spacer { flex: 1; }
+.volume { display: flex; align-items: center; gap: .4rem; font-size: .8rem; color: #b5c1d3; }
+.volume input { width: 6rem; padding: 0; }
+#desktop { position: relative; background: #000; width: 100%; height: 68vh; min-height: 12rem; overflow: hidden; touch-action: none; user-select: none; outline-offset: -3px; }
+#desktop:focus { outline: 2px solid #8dbaff; }
+#video { display: block; width: 100%; height: 100%; object-fit: contain; pointer-events: none; }
+#cursor { position: absolute; pointer-events: none; max-width: none; }
+#desktop.hide-local-cursor { cursor: none; }
+.hint { color: #a5b4c8; font-size: .85rem; }
+#input-hint { margin: .65rem .85rem; }
+.clipboard { padding: .65rem .85rem; border-top: 1px solid #354258; }
+.clipboard summary { cursor: pointer; }
+.clipboard label { display: block; font-size: .9rem; margin: .75rem 0 .5rem; }
+.clipboard textarea { display: block; resize: vertical; width: 100%; margin-bottom: .65rem; }
+.clipboard .hint { margin-left: .6rem; }
+#viewer:fullscreen { width: 100%; height: 100%; border: 0; border-radius: 0; }
+#viewer:fullscreen #desktop { flex: 1; min-height: 0; height: auto; }
+#viewer:fullscreen .clipboard, #viewer:fullscreen #input-hint { display: none; }
+@media (max-width: 600px) {
+  main { padding: .6rem; }
+  .login-card { margin: 1rem auto; }
+  .toolbar { gap: .4rem; }
+  .toolbar button { font-size: .8rem; padding: .5rem; }
+  .volume { flex: 1; }
+  #desktop { height: 56vh; }
+  .clipboard .hint { display: block; margin: .5rem 0 0; }
+}

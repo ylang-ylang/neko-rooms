@@ -9,6 +9,7 @@
     "test:agent": "node --test tests/agent-access.test.cjs",
     "test:auth": "node --test tests/manager-auth.test.cjs",
     "test:network": "node --test tests/network-metadata.test.cjs",
+    "test:aggregate": "node --test tests/aggregate-viewer.test.cjs",
     "generate:network-types": "node ../dev/api-gen-network-types.cjs"
   },
   "dependencies": {
