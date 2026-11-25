@@ -1,21 +1,22 @@
 # Native Neko, HTTPS + TURN/TLS on one TCP port
 
-Open **`https://neko.localhost:8443/manage/`**, create a room, then use **`https://neko.localhost:8443/room/native/`**. The viewer is the room image's **original Neko 3.2 UI and WebRTC**, including its native controls, audio, clipboard and other features. No copied frontend, MSE player, `aggregate.html`, or Manager `http` mode is used.
+Open **`https://neko.localhost:8443/manage/`**, create a room, then use **`https://neko.localhost:8443/room/native/`**. For another device on your LAN, use the [direct-IP configuration below](#direct-lan-access-without-ssh-or-dns). The viewer is the room image's **original Neko 3.2 UI and WebRTC**, including its native controls, audio, clipboard and other features. No copied frontend, MSE player, `aggregate.html`, or Manager `http` mode is used.
 
 This is a **fresh, local, single-Docker-host example** in the Manager project. It does not modify an existing installation, NAS, Neko server, room image or management UI. [The two-port example](../relay/) remains separate.
 
 ```text
-one published TCP socket: 127.0.0.1:8443 -> gateway:443
+one published TCP socket: <chosen-bind>:8443 -> gateway:443
                                    TLS ClientHello preread (no termination)
-    web SNI = neko.localhost ------> 127.0.0.1:8443 HTTPS -> neko-rooms:8080
-    turn.localhost / NO SNI -------> 127.0.0.1:5349 TURN/TLS -> turn:3478 TCP
+    HTTP ALPN h2 / http/1.1 -------> 127.0.0.1:8443 HTTPS -> neko-rooms:8080
+    other / unmatched TLS --------> 127.0.0.1:5349 TURN/TLS -> turn:3478 TCP
                                                               |
                                      private UDP allocations <-> native rooms
+    plain HTTP -------------------> 127.0.0.1:8081 HTTPS redirect / LAN-dev CA
 ```
 
 The loopback addresses above are **inside the gateway container**, not additional host bindings. Only its `443/tcp` is published. Coturn, Manager and Manager-created relay rooms publish no host ports; the UDP allocation pool is private. Docker DNS is re-resolved for Manager/coturn after container recreation.
 
-There are **two DNS names, one IP and one external port**. Web clients **must send the application hostname as SNI**; an IP-only HTTPS URL cannot select the web branch. Chromium's TURN/TLS client can omit SNI, so the default branch **must be TURN**, not HTTPS. Public ingress must forward **raw TCP at layer 4**, preserving ClientHello; an ordinary HTTP reverse proxy cannot carry TURN.
+Modern browsers advertise **HTTP ALPN** (`h2` / `http/1.1`) even for an IP-only HTTPS URL without SNI; this selects HTTPS. Native TURN/TLS uses different or no ALPN, with **TURN as the default TLS branch**. For distinct application/TURN names, application-name SNI is a legacy HTTP fallback only when ALPN is absent. A shared identity, including a LAN IP, disables that ambiguous fallback: HTTPS uses HTTP ALPN, and no-ALPN TLS remains TURN. DNS names are not required for LAN mode. Public ingress must forward **raw TCP at layer 4**, preserving ClientHello; an ordinary HTTP reverse proxy cannot carry TURN.
 
 ## Requirements
 
@@ -53,7 +54,7 @@ docker pull ghcr.io/m1k1o/neko/chromium:3.2.0@sha256:270face8b8111e639744fb7bcdb
 
 ## 2. Configure fresh private state, with a local development CA
 
-No public domain or pre-existing certificate is needed. Configuration is explicit, local-only and starts no services:
+No public domain or pre-existing certificate is needed. The default setup binds to loopback; explicit LAN mode is described below. Configure generates private files and starts no services:
 
 ```sh
 mkdir -p "${XDG_CACHE_HOME:-$HOME/.cache}"
@@ -69,11 +70,11 @@ python3 examples/single-port-relay/demo.py configure \
 STATE="$PRIVATE/state"
 ```
 
-Settings are **literal `KEY=value`**, not shell or dotenv: no interpolation, escapes, inline comments or removal of surrounding quotes. A dollar sign, `#`, backslash or quote in a supplied owner password is an actual character. Do not `source` the file. Unknown, duplicate, invalid and incomplete values fail instead of falling back. Only `APP_HOST`, `TURN_HOST`, **`PUBLIC_PORT`** exist for public addressing; there are no separate HTTPS/TURN public ports.
+Settings are **literal `KEY=value`**, not shell or dotenv: no interpolation, escapes, inline comments or removal of surrounding quotes. A dollar sign, `#`, backslash or quote in a supplied owner password is an actual character. Do not `source` the file. Unknown, duplicate, invalid and incomplete values fail instead of falling back. DNS mode uses `APP_HOST`, `TURN_HOST` and **`PUBLIC_PORT`**; LAN mode sets both hosts through `--lan-ip`. There are no separate HTTPS/TURN public ports.
 
-`--dev-ca` requires distinct **`.localhost`** names and a loopback bind. It rejects `--public`, a non-loopback bind, and supplied TLS paths. Defaults are `neko.localhost`, `turn.localhost`, `127.0.0.1`, port `8443`. Modern browsers resolve `.localhost` to loopback; if another client does not, configure both names locally or use that client's explicit resolution option. No DNS/hosts/trust store is changed automatically.
+Without `--lan-ip`, `--dev-ca` requires **`.localhost`** names and a loopback bind, without `--public`. Defaults remain `neko.localhost`, `turn.localhost`, `127.0.0.1`, port `8443`. Modern browsers resolve `.localhost` to loopback; if another client does not, use that client's explicit resolution option. Development CA mode never accepts supplied TLS paths. No DNS/hosts/trust store is changed automatically.
 
-Generated state stays **outside the checkout** (directory `700`, files `600`):
+Generated state stays **outside the checkout** (state directory `700`, private files `600`; LAN mode additionally makes a public certificate-only copy):
 
 | File/directory | Purpose |
 | --- | --- |
@@ -82,15 +83,39 @@ Generated state stays **outside the checkout** (directory `700`, files `600`):
 | `credentials.json` | Independent new Owner, native room user/admin and TURN credentials |
 | `nginx.conf`, `turnserver.conf` | Complete gateway and private coturn configuration |
 | `tls/ca.crt`, `tls/ca.key` | Local development CA; only import the **certificate**, never its key |
-| `tls/server.crt`, `tls/server.key` | 30-day SAN server certificate covering **both** names |
+| `tls/server.crt`, `tls/server.key` | 30-day server certificate covering the configured DNS names or LAN **IP SAN** |
+| `public/ca.crt` | LAN-dev-only public CA certificate copy (`644`, directory `755`), mounted read-only; never a key or credentials |
 | `room-request.json` | Optional native `api_version: 3` Owner API creation payload, name `native` |
 | `storage/` | Fresh demo-only Profile/Downloads data; no existing installation path is used |
 
-Repeated configure reuses credentials, CA, certificate and storage. It refuses implicit credential rotation, a changed SAN not covered by the existing certificate, partial trust material and an unrelated nonempty state directory. For a new CA/expired certificate, deliberately use a **new demo state/project**; do not silently replace a CA already trusted by a browser.
+Repeated configure reuses credentials, CA, certificate and storage. It refuses implicit credential rotation, a changed SAN not covered by the existing certificate, partial trust material and an unrelated nonempty state directory. To change SANs or renew an expired development leaf, explicitly add **`--renew-server-cert`**: only `server.crt` is replaced, retaining the existing CA, server key, credentials and storage. Replacing the CA itself requires a deliberately new demo state/project.
 
-## 3. Trust the CA in your own browser, then start
+### Direct LAN access without SSH or DNS
 
-Import **`$STATE/tls/ca.crt`** as a trusted website certificate authority in the browser you will use, then restart that browser. For Firefox use Settings → Privacy & Security → Certificates → View Certificates → Authorities → Import. For Chromium use its certificate manager; on Linux an existing user NSS store can also be updated **explicitly**:
+For example, if the Docker host's LAN address is `192.168.201.237`, set **`PUBLIC_BIND_IP=0.0.0.0`** (or that LAN IP) and **`PUBLIC_PORT=8443`** in your private settings, then configure:
+
+```sh
+python3 examples/single-port-relay/demo.py configure \
+  --env-file "$PRIVATE/settings.env" --state-dir "$STATE" \
+  --lan-ip 192.168.201.237 --dev-ca --public
+```
+
+`--lan-ip` accepts an explicit RFC1918 IPv4 address and sets **both** HTTPS and TURN hosts to it. When migrating an existing `.localhost` state, back up its server certificate and add **`--renew-server-cert` once** to issue the IP-SAN leaf using the same CA and server key. Keep the LAN flags on subsequent configure runs, but omit renewal unless needed. Browsers already trusting that CA need no re-import; a new client must still import it once.
+
+Start the services using section 3, then use these URLs directly from the LAN client:
+
+- Download the **public CA certificate only**: http://192.168.201.237:8443/ca.crt — import it as a trusted website CA before using HTTPS/TURN.
+- Owner UI: https://192.168.201.237:8443/manage/
+- Native viewer, after creating room `native`: https://192.168.201.237:8443/room/native/
+- Generated native ICE URL: `turns:192.168.201.237:8443?transport=tcp`.
+
+No SSH tunnel, hosts-file edit, public DNS or extra host port is needed. The same **TCP 8443** serves the LAN-dev certificate download; other HTTP paths return **308** to HTTPS at the same authority. Owner/viewer traffic and native TURN remain HTTPS/TLS with certificate verification. The download alias exists only in explicit LAN-dev mode and exposes neither private keys nor credentials.
+
+**Non-browser HTTPS/WSS clients:** without SNI and HTTP ALPN, a connection reaches the default TURN branch, not HTTPS. Explicitly enable ALPN `http/1.1` (or `h2` plus `http/1.1` as modern browsers do), or use the original distinct-hostname/SNI setup; LAN-IP mode does not guarantee compatibility with every Agent/CDP client.
+
+## 3. Start services and trust the CA in your browser
+
+Import **`$STATE/tls/ca.crt`** as a trusted website certificate authority in the browser you will use, then restart that browser. For a separate LAN device, start the services below first and obtain this certificate through the LAN download URL above. For Firefox use Settings → Privacy & Security → Certificates → View Certificates → Authorities → Import. For Chromium use its certificate manager; on Linux an existing user NSS store can also be updated **explicitly**:
 
 ```sh
 # Optional operator action, only if this is YOUR Chromium NSS database:
@@ -100,7 +125,7 @@ certutil -d "sql:$HOME/.pki/nssdb" -A -t 'C,,' \
 # certutil -d "sql:$HOME/.pki/nssdb" -D -n 'Neko single-port local CA'
 ```
 
-An OS trust-store import is another **opt-in operator** choice, not performed by the script. Never use `--ignore-certificate-errors`, `curl -k`, or a browser certificate-warning bypass as the demo's trust setup: TURN/TLS also needs a trusted certificate. Keep the development CA key private and the deployment on loopback.
+An OS trust-store import is another **opt-in operator** choice, not performed by the script. Never use `--ignore-certificate-errors`, `curl -k`, or a browser certificate-warning bypass as the demo's trust setup: TURN/TLS also needs a trusted certificate. Keep the development CA key private; non-loopback development access requires the explicit LAN configuration above.
 
 Use a direct Compose helper, without printing resolved secrets:
 
@@ -119,9 +144,13 @@ curl --fail --silent --show-error --cacert "$STATE/tls/ca.crt" \
   https://neko.localhost:8443/manage/auth/status
 ```
 
+The `curl` example above is for loopback mode. In LAN mode, omit `--resolve` and use **`https://192.168.201.237:8443/manage/auth/status`** with the same `--cacert` option.
+
 Do not share `dc config`, `docker inspect` environment dumps, generated payloads or room logs: they can contain credentials. `config --quiet` validates without dumping resolved configuration. Pinned Neko logs frontend TURN credentials at info/debug; existing Manager relay policy defaults new rooms to `warn`.
 
 ## 4. Use the original Owner and native room interfaces
+
+The steps below show loopback URLs; in LAN mode, use the IP URLs above instead.
 
 1. Open **`https://neko.localhost:8443/manage/`**. Privately read `credentials.json` in an editor and sign into the **existing Owner form** using `owner_username` / `owner_password`. No global Basic-auth or substitute login UI is added.
 2. Create room **`native`**, API **3**, selecting the pinned allowed image. Enter the saved `room_user_password` / `room_admin_password` as its native user/admin passwords; keep the normal separate Profile and Downloads private mounts. `room-request.json` has those settings for clients using the **existing authenticated Owner API** (`POST /manage/api/rooms`, then the usual room-start API). Creation/start are not done by configure or `up`.
@@ -132,7 +161,7 @@ Manager stays `NEKO_ROOMS_NETWORK_MODE=relay`, not `http`. Its existing private/
 
 Owner mutations must keep the exact HTTPS **Origin, including port**. Gateway forwarding preserves Host, HTTPS scheme, Authorization and WebSocket upgrades, so the existing Owner Secure-cookie and Agent Bearer boundaries remain in place. `/rooms/` never receives a gateway login challenge. **The stock official room image does not include this fork's CDP relay**: Agent authentication/routes remain unchanged, but actual CDP requires an explicitly selected compatible relay-enabled image; it is not supplied by this native TURN demo.
 
-For a transport-only check of the mandatory no-SNI TURN branch (certificate verification is still enabled):
+For a transport-only check of the mandatory no-SNI TURN branch in loopback mode (certificate verification is still enabled):
 
 ```sh
 openssl s_client -connect 127.0.0.1:8443 -noservername \
@@ -140,11 +169,13 @@ openssl s_client -connect 127.0.0.1:8443 -noservername \
   -verify_return_error </dev/null
 ```
 
+In LAN mode, use `-connect 192.168.201.237:8443` and replace `-verify_hostname turn.localhost` with `-verify_ip 192.168.201.237`.
+
 TLS verification alone does not establish TURN authentication/allocation or WebRTC success. Runtime acceptance should also check TURN rejects missing/bad credentials, allocations advertise the private IP, public peer permissions fail, private-room peer permissions succeed, TCP relay requests fail, and every room has empty host port bindings.
 
 ## Public deployment uses the same one-port architecture
 
-Supply **real distinct DNS names** (`APP_HOST`, `TURN_HOST`) pointing to the same gateway IP, `PUBLIC_PORT=443` (or your chosen single TCP port), the intended `PUBLIC_BIND_IP`, and absolute `TLS_CERT_FILE` / `TLS_KEY_FILE` paths to an unexpired fullchain/key covering **both names**. Run configure **without `--dev-ca`**; non-loopback binding additionally requires **`--public`**. Reserved test/example names are refused. Certificate issuance/renewal is external to this sample; DNS validation avoids needing port 80.
+For a DNS-based production setup, supply **real distinct DNS names** (`APP_HOST`, `TURN_HOST`) pointing to the same gateway IP, `PUBLIC_PORT=443` (or your chosen single TCP port), the intended `PUBLIC_BIND_IP`, and absolute `TLS_CERT_FILE` / `TLS_KEY_FILE` paths to an unexpired fullchain/key covering **both names**. Run configure **without `--dev-ca`**; non-loopback binding additionally requires **`--public`**. Reserved test/example names are refused. Certificate issuance/renewal is external to this sample; DNS validation avoids needing port 80.
 
 Forward only that TCP port at layer 4, with TLS passthrough. Do not put an HTTPS-only CDN, HTTP proxy or TLS-terminating ingress in front of TURN. Do not expose UDP, `5349`, `3478`, the allocation pool, Manager `8080`, CDP, or Docker. The selected public port appears in both HTTPS and `turns:TURN_HOST:PUBLIC_PORT?transport=tcp` URLs; `443` is canonically omitted only from the HTTPS origin.
 
@@ -158,8 +189,8 @@ python3 -B -m unittest discover -s examples/single-port-relay -p 'test_*.py' -v
 python3 examples/single-port-relay/demo.py down --state-dir "$STATE"
 ```
 
-The stdlib tests use temporary private files, a fake Unix socket and mocked Docker network inspection; when Compose is installed they also parse the **actual Compose file** without starting services. They check one TCP publication, identical public URI ports, explicit web SNI/default TURN, private upstreams, raw secret/path characters, native mode/image/payload, certificate SANs, state permissions and idempotency. They do **not** claim container/media/browser acceptance or change/pull/build any runtime image.
+The stdlib tests use temporary private files, a fake Unix socket and mocked Docker network inspection; when Compose is installed they also parse the **actual Compose file** without starting services. They check one TCP publication, identical public URI ports, HTTP ALPN/legacy SNI/default TURN routing, explicit LAN flags, private upstreams, raw secret/path characters, native mode/image/payload, DNS/IP SAN validation, leaf-only renewal, certificate-only bootstrap, state permissions and idempotency. They do **not** claim container/media/browser acceptance or change/pull/build any runtime image.
 
 `down` removes only this Compose project's services. Manager-created rooms are **not Compose services** and are not automatically deleted; storage, private state and the explicitly supplied external network are retained. Remove only your own now-unused bridge and browser CA trust when finished. Restarting Manager invalidates its existing in-memory Owner sessions and Agent keys.
 
-Mechanism references: [Nginx SSL preread](https://nginx.org/en/docs/stream/ngx_stream_ssl_preread_module.html) reads `$ssl_preread_server_name` without terminating TLS; [stream proxy_pass](https://nginx.org/en/docs/stream/ngx_stream_proxy_module.html#proxy_pass) resolves variable upstreams through the configured resolver; [coturn 4.6.3 configuration](https://github.com/coturn/coturn/blob/4.6.3/examples/etc/turnserver.conf) documents peer allow/deny precedence.
+Mechanism references: [Nginx SSL preread](https://nginx.org/en/docs/stream/ngx_stream_ssl_preread_module.html) reads `$ssl_preread_alpn_protocols`, `$ssl_preread_server_name` and `$ssl_preread_protocol` without terminating TLS; [stream proxy_pass](https://nginx.org/en/docs/stream/ngx_stream_proxy_module.html#proxy_pass) resolves variable upstreams through the configured resolver; [coturn 4.6.3 configuration](https://github.com/coturn/coturn/blob/4.6.3/examples/etc/turnserver.conf) documents peer allow/deny precedence.
