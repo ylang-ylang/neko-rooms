@@ -84,7 +84,7 @@ func (manager *RoomManagerCtx) Clone(ctx context.Context, id, name string) (entr
 	if err != nil {
 		return nil, errors.New("cannot reserve clone staging storage")
 	}
-	committed, success := false, false
+	committed, success, createAttempted := false, false, false
 	var targetID string
 	// Cleanup has an independent context: a disconnected client must not leave
 	// a paused source, orphan target container, or partial target storage.
@@ -96,12 +96,13 @@ func (manager *RoomManagerCtx) Clone(ctx context.Context, id, name string) (entr
 		defer cancel()
 		// Docker can accept Create but lose its response. Only recover a
 		// container bearing this operation's unpredictable ownership label.
-		if targetID == "" {
+		if targetID == "" && createAttempted {
 			candidate, lookupErr := manager.containerByName(cleanup, name)
 			if lookupErr == nil && candidate.Labels[cloneOperationLabel] == operation {
 				targetID = candidate.ID
 			} else if lookupErr != nil && !errors.Is(lookupErr, types.ErrRoomNotFound) {
-				resultErr = errors.Join(resultErr, errors.New("cannot verify failed clone container cleanup"))
+				resultErr = errors.Join(resultErr, errors.New("cannot verify failed clone container cleanup; target storage retained"))
+				return // Its mount may still be active after an ambiguous Create.
 			}
 		}
 		if targetID != "" {
@@ -120,11 +121,16 @@ func (manager *RoomManagerCtx) Clone(ctx context.Context, id, name string) (entr
 	}()
 
 	var cookies []map[string]json.RawMessage
+	var localStorage []*cloneFrame
 	if source.State.Running && !source.State.Paused {
 		// Read before freezing Chrome: it cannot answer CDP while paused.
 		cookies, err = manager.snapshotCookies(ctx, source.ID[:12]+":9223")
 		if err != nil {
 			return nil, fmt.Errorf("capture live browser identity: %w", err)
+		}
+		localStorage, err = manager.snapshotLocalStorage(ctx, source.ID[:12]+":9223")
+		if err != nil {
+			return nil, fmt.Errorf("capture active browser storage: %w", err)
 		}
 	}
 	if err := manager.snapshotSource(ctx, source, sourceRoot, staging); err != nil {
@@ -144,6 +150,7 @@ func (manager *RoomManagerCtx) Clone(ctx context.Context, id, name string) (entr
 	// Once Docker Create has begun, finish collecting its result despite HTTP
 	// cancellation, then roll back immediately if the request was canceled.
 	createCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
+	createAttempted = true
 	targetID, err = manager.create(createCtx, *settings, operation)
 	cancel()
 	if err != nil {
@@ -161,6 +168,9 @@ func (manager *RoomManagerCtx) Clone(ctx context.Context, id, name string) (entr
 	if cookies != nil {
 		if err := manager.restoreCookies(ctx, targetID+":9223", cookies); err != nil {
 			return nil, fmt.Errorf("restore cloned browser identity: %w", err)
+		}
+		if err := manager.restoreLocalStorage(ctx, targetID+":9223", localStorage); err != nil {
+			return nil, fmt.Errorf("restore active browser storage: %w", err)
 		}
 	}
 	entry, err = manager.GetEntry(ctx, targetID)

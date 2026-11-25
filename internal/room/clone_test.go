@@ -147,7 +147,7 @@ func TestClonePreservesConfigurationAndIsolatedManagedStorage(t *testing.T) {
 				t.Fatal("clone writes mutated source data")
 			}
 			browser.mu.Lock()
-			if !reflect.DeepEqual(browser.methods, []string{"Storage.getCookies", "Storage.setCookies"}) || len(browser.applied) != 2 {
+			if !reflect.DeepEqual(browser.methods, []string{"Storage.getCookies", "Target.getBrowserContexts", "Target.getTargets", "Storage.clearCookies", "Storage.setCookies"}) || len(browser.applied) != 2 {
 				t.Fatal("clone did not supplement identity in existing default contexts")
 			}
 			session, persistent := browser.applied[0], browser.applied[1]

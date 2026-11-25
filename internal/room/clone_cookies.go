@@ -74,6 +74,10 @@ func (browser *browserCDP) close() {
 }
 
 func (browser *browserCDP) call(ctx context.Context, method string, params any, result any) error {
+	return browser.callSession(ctx, "", method, params, result)
+}
+
+func (browser *browserCDP) send(ctx context.Context, session, method string, params any) (int, error) {
 	browser.id++
 	deadline := time.Now().Add(10 * time.Second)
 	if end, ok := ctx.Deadline(); ok && end.Before(deadline) {
@@ -82,11 +86,20 @@ func (browser *browserCDP) call(ctx context.Context, method string, params any, 
 	browser.conn.SetWriteDeadline(deadline)
 	browser.conn.SetReadDeadline(deadline)
 	if err := browser.conn.WriteJSON(struct {
-		ID     int    `json:"id"`
-		Method string `json:"method"`
-		Params any    `json:"params,omitempty"`
-	}{browser.id, method, params}); err != nil {
-		return fmt.Errorf("browser %s transport failed", method)
+		ID        int    `json:"id"`
+		Method    string `json:"method"`
+		Params    any    `json:"params,omitempty"`
+		SessionID string `json:"sessionId,omitempty"`
+	}{browser.id, method, params, session}); err != nil {
+		return 0, fmt.Errorf("browser %s transport failed", method)
+	}
+	return browser.id, nil
+}
+
+func (browser *browserCDP) callSession(ctx context.Context, session, method string, params any, result any) error {
+	id, err := browser.send(ctx, session, method, params)
+	if err != nil {
+		return err
 	}
 	for {
 		var message struct {
@@ -97,7 +110,7 @@ func (browser *browserCDP) call(ctx context.Context, method string, params any, 
 		if err := browser.conn.ReadJSON(&message); err != nil {
 			return fmt.Errorf("browser %s response unavailable", method)
 		}
-		if message.ID != browser.id {
+		if message.ID != id {
 			continue
 		}
 		if len(message.Error) != 0 {
@@ -157,6 +170,11 @@ func (manager *RoomManagerCtx) restoreCookies(ctx context.Context, address strin
 		browser, err := manager.connectBrowser(ctx, address)
 		if err == nil {
 			defer browser.close()
+			// Buffered deletions matter too: replace the target's default
+			// cookie jar rather than resurrecting stale disk-only cookies.
+			if err := browser.call(ctx, "Storage.clearCookies", nil, nil); err != nil {
+				return err
+			}
 			return browser.call(ctx, "Storage.setCookies", struct {
 				Cookies []map[string]json.RawMessage `json:"cookies"`
 			}{cookies}, nil)

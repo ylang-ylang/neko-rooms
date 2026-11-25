@@ -433,10 +433,6 @@ func (manager *RoomManagerCtx) create(ctx context.Context, settings types.RoomSe
 		UserDefined:   settings.Labels,
 	})
 
-	if cloneOperation != "" {
-		labels[cloneOperationLabel] = cloneOperation
-	}
-
 	//
 	// Set traefik labels
 	//
@@ -504,6 +500,11 @@ func (manager *RoomManagerCtx) create(ctx context.Context, settings types.RoomSe
 			continue // this label must describe the actual generated network policy
 		}
 		labels[key] = val
+	}
+
+	// Cleanup ownership is authoritative, not an operator label override.
+	if cloneOperation != "" {
+		labels[cloneOperationLabel] = cloneOperation
 	}
 
 	// HTTP aggregation is routed exclusively through Manager, never directly
