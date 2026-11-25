@@ -132,7 +132,7 @@ class TopologyTests(unittest.TestCase):
         demo.validate_topology(values, True, False)
         self.assertEqual(values["WEB_SNI_ROUTE"], "neko.localhost 127.0.0.1:8443;")
 
-    def test_alpn_http_ip_routing_preserves_default_turn_and_legacy_web_sni(self):
+    def test_alpn_http_ip_fast_path_and_ambiguous_tls_classifier(self):
         nginx = (HERE / "nginx.conf.template").read_text()
         self.assertIn("map $ssl_preread_server_name $sni_backend", nginx)
         self.assertIn("@WEB_SNI_ROUTE@", nginx)
@@ -153,8 +153,40 @@ class TopologyTests(unittest.TestCase):
         self.assertIn("listen 127.0.0.1:8443 ssl;", nginx)
         self.assertIn("listen 127.0.0.1:5349 ssl;", nginx)
         self.assertEqual(nginx.count("resolver 127.0.0.11 valid=10s ipv6=off;"), 2)
-        self.assertIn("proxy_pass $turn_backend;", nginx)
+        self.assertIn("map $remote_addr $classifier_backend { default classifier:3479; }", nginx)
+        self.assertIn("proxy_pass $classifier_backend;", nginx)
+        self.assertNotIn("turn:3478", nginx, "ambiguous TLS must be classified, never sent directly to TURN")
+        self.assertIn("listen 8082;", nginx)
+        self.assertNotIn("listen 8082 ssl", nginx)
         self.assertIn("set $manager http://neko-rooms:8080;", nginx)
+
+    def test_classifier_accepts_only_positive_http_or_complete_stun_header(self):
+        classifier = (HERE / "haproxy.cfg.template").read_text()
+        for setting in ("mode tcp", "bind :3479", "tcp-request inspect-delay 5s",
+                        "acl is_http req.proto_http", "acl stun_header req.len ge 20",
+                        "acl stun_cookie req.payload(4,4) -m bin 2112a442",
+                        "tcp-request content accept if is_http",
+                        "tcp-request content accept if stun_header stun_cookie",
+                        "tcp-request content reject if WAIT_END",
+                        "use_backend https_backend if is_http",
+                        "use_backend turn_backend if stun_header stun_cookie",
+                        "nameserver embedded 127.0.0.11:53",
+                        "server gateway gateway:8082 resolvers docker resolve-prefer ipv4 init-addr none",
+                        "server turn turn:3478 resolvers docker resolve-prefer ipv4 init-addr none"):
+            self.assertIn(setting, classifier)
+        self.assertNotIn("default_backend", classifier, "unknown traffic must not silently become TURN")
+        self.assertNotRegex(classifier, r"(?m)^\s*(?:bind .*ssl|crt |ca-file )")
+
+    def test_private_http_backend_preserves_https_origin_and_public_host(self):
+        nginx = (HERE / "nginx.conf.template").read_text()
+        bootstrap, web = nginx.split("listen 127.0.0.1:8443 ssl;", 1)
+        self.assertIn("listen 8082;", web)
+        self.assertNotIn("proxy_pass $manager", bootstrap, "public plaintext is CA/redirect only")
+        for header in ("Host $http_host", "X-Forwarded-Host $http_host", "X-Forwarded-Proto https",
+                       "X-Forwarded-Port @PUBLIC_PORT@", "Authorization $http_authorization",
+                       "Upgrade $http_upgrade", "Connection $connection_upgrade"):
+            self.assertIn("proxy_set_header " + header + ";", web)
+        self.assertNotIn("proxy_set_header X-Forwarded-Proto $scheme;", web)
 
     def test_private_turn_policy_preserved(self):
         turn = (HERE / "turnserver.conf.template").read_text().splitlines()
@@ -247,7 +279,8 @@ class ConfigurationTests(unittest.TestCase):
         self.assertEqual(stat.S_IMODE(self.state.stat().st_mode), 0o700)
         for item in self.state.rglob("*"):
             if item.is_file():
-                self.assertEqual(stat.S_IMODE(item.stat().st_mode), 0o600, item.name)
+                expected_mode = 0o644 if item.name == "haproxy.cfg" else 0o600
+                self.assertEqual(stat.S_IMODE(item.stat().st_mode), expected_mode, item.name)
         for value in json.loads((self.state / "credentials.json").read_text()).values():
             self.assertNotIn(value, (self.state / "compose.env").read_text(), "credentials must not enter Compose interpolation")
 
@@ -503,9 +536,25 @@ class ConfigurationTests(unittest.TestCase):
         self.assertEqual(len(ports), 1)
         self.assertEqual((ports[0]["host_ip"], ports[0]["published"], ports[0]["target"], ports[0]["protocol"]),
                          ("127.0.0.1", "8443", 443, "tcp"))
-        for name in ("turn", "neko-rooms"):
+        for name in ("turn", "neko-rooms", "classifier"):
             self.assertFalse(services[name].get("ports"))
             self.assertNotEqual(services[name].get("network_mode"), "host")
+        classifier = services["classifier"]
+        self.assertRegex(classifier["image"], r"^haproxy:3\.2-alpine@sha256:[a-f0-9]{64}$")
+        self.assertEqual(classifier["user"], "haproxy")
+        self.assertEqual(classifier["cap_drop"], ["ALL"])
+        self.assertTrue(classifier["read_only"])
+        self.assertIn("classifier", services["gateway"]["depends_on"])
+        self.assertFalse(classifier.get("depends_on"), "runtime DNS must break the gateway dependency cycle")
+        self.assertEqual(len(classifier["volumes"]), 1, "classifier must not receive TLS or auth material")
+        mount = classifier["volumes"][0]
+        self.assertEqual(mount["source"], str(self.state / "haproxy.cfg"))
+        self.assertEqual(mount["target"], "/usr/local/etc/haproxy/haproxy.cfg")
+        self.assertTrue(mount["read_only"])
+        self.assertFalse(mount["bind"]["create_host_path"])
+        self.assertEqual((self.state / "haproxy.cfg").read_text(), (HERE / "haproxy.cfg.template").read_text())
+        for secret in json.loads((self.state / "credentials.json").read_text()).values():
+            self.assertNotIn(secret, (self.state / "haproxy.cfg").read_text())
         self.assertEqual(services["neko-rooms"]["pull_policy"], "never")
         env = services["neko-rooms"]["environment"]
         self.assertEqual(env["NEKO_ROOMS_NETWORK_MODE"], "relay")
@@ -553,8 +602,9 @@ class ConfigurationTests(unittest.TestCase):
                 self.assertEqual(len(ports), 1)
                 self.assertEqual((ports[0]["host_ip"], ports[0]["published"], ports[0]["target"], ports[0]["protocol"]),
                                  ("0.0.0.0", "8443", 443, "tcp"))
-                self.assertFalse(services["turn"].get("ports"))
-                self.assertFalse(services["neko-rooms"].get("ports"))
+                for name, service in services.items():
+                    if name != "gateway":
+                        self.assertFalse(service.get("ports"), name)
                 env = services["neko-rooms"]["environment"]
                 self.assertEqual(env["NEKO_ROOMS_NETWORK_MODE"], "relay")
                 self.assertEqual(env["NEKO_ROOMS_NEKO_IMAGES"], demo.ROOM_IMAGE)

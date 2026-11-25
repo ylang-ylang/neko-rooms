@@ -27,7 +27,7 @@ DEFAULTS = {
 }
 COMPOSE_KEYS = (
     "COMPOSE_PROJECT_NAME", "RELAY_STATE_DIR", "APP_HOST", "TURN_HOST", "PUBLIC_PORT", "PUBLIC_BIND_IP",
-    "PUBLIC_ORIGIN", "TLS_CERT_FILE", "TLS_KEY_FILE", "MANAGER_IMAGE", "ROOM_IMAGE", "ROOM_NETWORK",
+    "PUBLIC_ORIGIN", "TLS_CERT_FILE", "TLS_KEY_FILE", "HAPROXY_CONFIG_FILE", "MANAGER_IMAGE", "ROOM_IMAGE", "ROOM_NETWORK",
     "ROOM_NETWORK_CIDR", "TURN_PRIVATE_IP", "INSTANCE_NAME", "DOCKER_SOCKET", "STORAGE_PATH",
 )
 MARKER = "native-single-port-relay-v1\n"
@@ -143,8 +143,8 @@ def validate_topology(values, dev_ca, public, lan_ip=None, turn_host=None):
         fail("production requires real DNS names; local .localhost setup requires --dev-ca")
     if not bind.is_loopback and not public:
         fail("non-loopback binding requires explicit --public")
-    # HTTP ALPN is authoritative. Only distinct names can safely fall back to
-    # web SNI for older HTTP clients without ALPN; shared-name/no-ALPN is TURN.
+    # Distinct web SNI / HTTP ALPN are fast paths. Shared identities and clients
+    # offering neither are classified AFTER TLS termination as HTTP or STUN.
     values["WEB_SNI_ROUTE"] = (values["APP_HOST"] + " 127.0.0.1:8443;"
                                if values["APP_HOST"] != values["TURN_HOST"] else "")
     values["DEV_CA_LOCATION"] = ("location = /ca.crt { alias /run/relay/public/ca.crt; "
@@ -342,6 +342,7 @@ def configure(settings, state, dev_ca=False, public=False, lan_ip=None, renew_se
     storage.mkdir(mode=0o700, exist_ok=True)
     saved = credentials(state, values)
     values.update(RELAY_STATE_DIR=str(state), TLS_CERT_FILE=str(cert), TLS_KEY_FILE=str(key),
+                  HAPROXY_CONFIG_FILE=str(state / "haproxy.cfg"),
                   DOCKER_SOCKET=str(socket), STORAGE_PATH=str(storage),
                   TURN_USERNAME=saved["turn_username"], TURN_PASSWORD=saved["turn_password"])
     ice = json.dumps([{"urls": [f"turns:{values['TURN_HOST']}:{values['PUBLIC_PORT']}?transport=tcp"],
@@ -350,9 +351,12 @@ def configure(settings, state, dev_ca=False, public=False, lan_ip=None, renew_se
         "NEKO_ROOMS_ADMIN_USERNAME=" + saved["owner_username"],
         "NEKO_ROOMS_ADMIN_PASSWORD=" + saved["owner_password"],
         "NEKO_ROOMS_RELAY_ICE_SERVERS_FRONTEND=" + ice, ""]))
-    for name in ("nginx.conf", "turnserver.conf"):
+    for name in ("nginx.conf", "turnserver.conf", "haproxy.cfg"):
         text = (HERE / (name + ".template")).read_text()
         private_write(state, name, re.sub(r"@([A-Z_]+)@", lambda m: values[m[1]], text))
+    # HAProxy runs unprivileged. This single-file mount has no credentials or
+    # keys; the enclosing private state and every other config stay private.
+    (state / "haproxy.cfg").chmod(0o644)
     private_write(state, "compose.env", "\n".join(k + "=" + compose_literal(values[k]) for k in COMPOSE_KEYS) + "\n")
     request = {
         "api_version": 3, "name": "native", "neko_image": values["ROOM_IMAGE"],
