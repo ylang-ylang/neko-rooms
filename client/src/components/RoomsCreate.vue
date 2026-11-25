@@ -14,7 +14,7 @@
             <v-text-field
               label="Name"
               v-model="data.name"
-              :rules="[ rules.minLen(2), rules.containerNameStart, rules.containerName ]"
+              :rules="roomNameRules"
               autocomplete="off"
               :hint="!data.name ? '... using random name' : ''"
               persistent-hint
@@ -547,6 +547,7 @@
 import { Vue, Component, Ref, Watch } from 'vue-property-decorator'
 import { AxiosError } from 'axios'
 import { randomPassword } from '@/utils/random'
+import { roomNameRules } from '@/utils/room-name'
 
 import {
   RoomSettings,
@@ -568,6 +569,7 @@ export default class RoomsCreate extends Vue {
   @Ref('form') readonly _form!: VForm
 
   public valid = true
+  public roomNameRules = roomNameRules
 
   public screen = true
   public extended = false
@@ -594,20 +596,11 @@ export default class RoomsCreate extends Vue {
     required(val: any) {
       return val === null || typeof val === 'undefined' || val === "" ? 'This filed is mandatory.' : true
     },
-    minLen: (min: number) =>
-      (val: string) => 
-        val ? (val.length >= min || 'This field must have atleast ' + min + ' characters') : true,
     onlyPositive(val: number) {
       return val < 0 ? 'Value cannot be negative.' : true
     },
     nonZero(val: string) {
       return val === "0" ? 'Value cannot be zero.' : true
-    },
-    containerName(val: string) {
-      return val && !/^[a-zA-Z0-9_.-]+$/.test(val) ? 'Must only contain a-z A-Z 0-9 _ . -' : true
-    },
-    containerNameStart(val: string) {
-      return val && /^[_.-]/.test(val) ? 'Cannot start with _ . -' : true
     },
     absolutePath(val: string) {
       return val[0] !== "/" ? 'Must be absolute path, starting with /.' : true

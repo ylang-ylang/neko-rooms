@@ -1,7 +1,7 @@
 <template>
   <v-tooltip bottom v-if="tmpl" open-delay="300">
     <template v-slot:activator="{ on, attrs }">
-      <v-btn v-bind="attrs" v-on="on" @click="Action" :color="tmpl.color" :disabled="disabled" :loading="loading"
+      <v-btn v-bind="attrs" v-on="on" @click="Action" :color="tmpl.color" :disabled="disabled" :loading="loading" :aria-label="tmpl.tooltip"
         icon><v-icon>{{ tmpl.icon }}</v-icon></v-btn>
     </template>
     <span>{{ tmpl.tooltip }}</span>

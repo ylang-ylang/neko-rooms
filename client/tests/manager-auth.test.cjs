@@ -193,7 +193,7 @@ test('real generated default Axios and handwritten Agent instance share one redi
     assert.equal(h.instances.length, 1)
     assert.equal(h.instances[0].interceptors.response.handlers.length, 1)
     const results = await Promise.allSettled([
-      generated.roomsList(), agent.listAgentKeys('stable /名'),
+      generated.roomsList(), generated.roomClone('stable /名', { name: 'separate-room' }), agent.listAgentKeys('stable /名'),
       agent.createAgentKey('stable', 3600, ''), agent.revokeAgentKey('stable', 'key /id'),
     ])
     for (const result of results) {
@@ -205,6 +205,9 @@ test('real generated default Axios and handwritten Agent instance share one redi
     assert.deepEqual(h.redirects, [h.prefix + '/auth/login?next=' + encodeURIComponent(pathname + '?view=rooms#agent')])
     assert.ok(h.requests.some(request => request.url === h.auth.managerBasePath + '/api/rooms'))
     assert.ok(h.requests.some(request => request.url.includes('/api/agent/rooms/stable%20%2F%E5%90%8D/keys')))
+    const clone = h.requests.find(request => request.url.endsWith('/api/rooms/stable%20%2F%E5%90%8D/clone'))
+    assert.equal(clone.method, 'post')
+    assert.deepEqual(JSON.parse(clone.data), { name: 'separate-room' })
     for (const request of h.requests) {
       assert.equal(request.headers.get('Authorization'), undefined)
       assert.equal(request.headers.get('X-CSRF-Token'), undefined)

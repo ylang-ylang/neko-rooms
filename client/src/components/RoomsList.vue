@@ -1,5 +1,7 @@
 <template>
   <div>
+    <v-alert v-if="cloneSuccess" type="success" outlined dense role="status" class="text-break">{{ cloneSuccess }}</v-alert>
+    <v-alert v-if="cloneRefreshError" type="warning" outlined dense role="alert">{{ cloneRefreshError }}</v-alert>
     <v-data-table :headers="headers" :items="rooms" class="room-list elevation-1" :loading="loading"
       loading-text="Loading... Please wait" hide-default-footer>
       <template v-slot:[`item.url`]="{ item }">
@@ -50,6 +52,14 @@
           <RoomActionBtn action="stop" :roomId="item.id" :disabled="!item.running && !item.paused" />
           <RoomActionBtn action="pause" :roomId="item.id" :disabled="!item.running" />
           <RoomActionBtn action="restart" :roomId="item.id" :disabled="!item.running" />
+          <v-tooltip bottom open-delay="300">
+            <template v-slot:activator="{ on, attrs }">
+              <v-btn v-bind="attrs" v-on="on" icon color="primary" :disabled="!item.id || !item.name"
+                :aria-label="'复制房间 ' + item.name"
+                @click="OpenClone(item)"><v-icon>mdi-content-copy</v-icon></v-btn>
+            </template>
+            <span>复制房间</span>
+          </v-tooltip>
         </div>
       </template>
       <template v-slot:[`item.agent`]="{ item }">
@@ -63,6 +73,28 @@
     </v-data-table>
 
     <AgentAccess v-if="agentRoomName" :key="agentRoomName" :roomName="agentRoomName" @close="agentRoomName = ''" />
+
+    <v-dialog :value="!!cloneSource" :persistent="cloneLoading" max-width="480px"
+      aria-labelledby="room-clone-title" @input="onCloneDialogInput">
+      <v-card v-if="cloneSource" :aria-busy="cloneLoading">
+        <v-card-title id="room-clone-title" class="headline">复制房间</v-card-title>
+        <v-form ref="cloneForm" @submit.prevent="Clone">
+          <v-card-text>
+            <p class="text-break">源房间：{{ cloneSource.name }}</p>
+            <p>复制配置和持久化浏览器数据，并自动启动新房间。</p>
+            <v-text-field v-model="cloneName" label="新房间名称" :rules="cloneNameRules"
+              :disabled="cloneLoading" autofocus autocomplete="off" @focus="selectCloneName" @input="cloneError = ''" />
+            <v-alert v-if="cloneError" type="error" outlined dense role="alert">{{ cloneError }}</v-alert>
+            <v-progress-linear v-if="cloneLoading" indeterminate aria-label="正在复制并启动房间" />
+          </v-card-text>
+          <v-card-actions>
+            <v-spacer />
+            <v-btn text :disabled="cloneLoading" @click="CloseClone">取消</v-btn>
+            <v-btn type="submit" color="primary" :loading="cloneLoading" :disabled="cloneLoading">复制并启动</v-btn>
+          </v-card-actions>
+        </v-form>
+      </v-card>
+    </v-dialog>
 
     <v-dialog v-model="dialog" max-width="920px">
       <v-card>
@@ -85,6 +117,9 @@
 
 <script lang="ts">
 import { Vue, Component, Prop } from 'vue-property-decorator'
+import axios from 'axios'
+import { RoomEntry } from '@/api'
+import { roomNameRules } from '@/utils/room-name'
 import RoomInfo from '@/components/RoomInfo.vue'
 import RoomActionBtn from '@/components/RoomActionBtn.vue'
 import AgentAccess from '@/components/AgentAccess.vue'
@@ -103,6 +138,75 @@ export default class RoomsList extends Vue {
   public roomId = ''
   public agentRoomName = ''
   public roomLoading = [] as Array<string>
+  public cloneSource: RoomEntry | null = null
+  public cloneName = ''
+  public cloneLoading = false
+  public cloneError = ''
+  public cloneSuccess = ''
+  public cloneRefreshError = ''
+  public cloneNameRules = [
+    (value: string) => !!value || '请输入新房间名称。',
+    ...roomNameRules,
+  ]
+
+  OpenClone(room: RoomEntry): void {
+    if (this.cloneLoading || !room.id || !room.name) return
+    this.cloneSource = room
+    this.cloneName = room.name + '-copy'
+    this.cloneError = ''
+    this.cloneSuccess = ''
+    this.cloneRefreshError = ''
+  }
+
+  selectCloneName(event: FocusEvent): void {
+    (event.target as HTMLInputElement).select()
+  }
+
+  onCloneDialogInput(open: boolean): void {
+    if (!open) this.CloseClone()
+  }
+
+  CloseClone(): void {
+    // A POST already in flight is not cancellable; closing must not imply rollback.
+    if (this.cloneLoading) return
+    this.cloneSource = null
+    this.cloneName = ''
+    this.cloneError = ''
+  }
+
+  async Clone(): Promise<void> {
+    if (this.cloneLoading || !this.cloneSource) return
+    const form = this.$refs.cloneForm as Vue & { validate: () => boolean }
+    if (!form.validate()) return
+    const roomId = this.cloneSource.id
+    const name = this.cloneName
+    this.cloneLoading = true
+    this.cloneError = ''
+    try {
+      await this.$store.dispatch('ROOMS_CLONE', { roomId, name })
+      this.cloneSuccess = `房间「${name}」已创建并启动，可在列表查看就绪状态。`
+      this.cloneSource = null
+      this.cloneName = ''
+      try {
+        await this.$store.dispatch('ROOMS_LOAD')
+      } catch {
+        // Creation has committed. A refresh failure must never invite another clone POST.
+        this.cloneRefreshError = '房间已创建，但列表刷新失败。请手动刷新列表，不要重复复制。'
+      }
+    } catch (error) {
+      if (axios.isAxiosError(error) && error.response) {
+        const { status, data } = error.response
+        const detail = typeof data === 'string' ? data.trim() :
+          (typeof data?.message === 'string' ? data.message : typeof data?.error === 'string' ? data.error : '')
+        this.cloneError = status === 409 ? '此名称的房间或数据已存在，请使用其他名称。（HTTP 409）' :
+          `复制失败（HTTP ${status}）${detail ? '：' + detail : '，请重试。'}`
+      } else {
+        this.cloneError = '网络请求失败，复制结果尚未确认。请先刷新房间列表，再决定是否重试。'
+      }
+    } finally {
+      this.cloneLoading = false
+    }
+  }
 
   get headers() {
     return [

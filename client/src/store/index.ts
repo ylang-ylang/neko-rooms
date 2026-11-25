@@ -7,6 +7,7 @@ import {
   ConfigApi,
   RoomEntry,
   RoomSettings,
+  RoomCloneRequest,
   RoomStats,
   RoomsApi,
   DefaultApi,
@@ -93,6 +94,11 @@ export default new Vuex.Store({
     async ROOMS_CREATE_AND_START({ commit }: ActionContext<State, State>, roomSettings: RoomSettings): Promise<RoomEntry> {
       const res = await roomsApi.roomCreate(roomSettings, true)
       commit('ROOMS_ADD', res.data);
+      return res.data
+    },
+    async ROOMS_CLONE(_: ActionContext<State, State>, { roomId, name }: RoomCloneRequest & { roomId: string }): Promise<RoomEntry> {
+      const res = await roomsApi.roomClone(roomId, { name })
+      // Clone starts server-side. Its id-only create response is not a complete list entry.
       return res.data
     },
     async ROOMS_GET({ commit }: ActionContext<State, State>, roomId: string) {

@@ -260,6 +260,7 @@ test('ported room defaults keep Profile/Downloads independent across instances a
   state.roomsConfig.neko_images = ['truenas-neko-chromium-cdp:3.2.0-1']
   const Component = load('src/components/RoomsCreate.vue', {
     '@/api/index': enums, '@/utils/random': { randomPassword: () => '' },
+    '@/utils/room-name': load('src/utils/room-name.ts'),
   }).default
   const create = () => new Component({ beforeCreate() { this.$store = { state } } })
   const first = create(), second = create()

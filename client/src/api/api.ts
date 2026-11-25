@@ -213,6 +213,19 @@ export interface PullStatus {
     'finished'?: string;
 }
 /**
+ *
+ * @export
+ * @interface RoomCloneRequest
+ */
+export interface RoomCloneRequest {
+    /**
+     * Unique new room name; existing rooms or storage are never replaced.
+     * @type {string}
+     * @memberof RoomCloneRequest
+     */
+    'name': string;
+}
+/**
  * 
  * @export
  * @interface RoomEntry
@@ -1102,6 +1115,46 @@ export const RoomsApiAxiosParamCreator = function (configuration?: Configuration
             };
         },
         /**
+         *
+         * @summary Clone a room and start the independent copy
+         * @param {string} roomId
+         * @param {RoomCloneRequest} roomCloneRequest
+         * @param {*} [options] Override http request option.
+         * @throws {RequiredError}
+         */
+        roomClone: async (roomId: string, roomCloneRequest: RoomCloneRequest, options: RawAxiosRequestConfig = {}): Promise<RequestArgs> => {
+            // verify required parameter 'roomId' is not null or undefined
+            assertParamExists('roomClone', 'roomId', roomId)
+            // verify required parameter 'roomCloneRequest' is not null or undefined
+            assertParamExists('roomClone', 'roomCloneRequest', roomCloneRequest)
+            const localVarPath = `/api/rooms/{roomId}/clone`
+                .replace(`{${"roomId"}}`, encodeURIComponent(String(roomId)));
+            // use dummy base URL string because the URL constructor only accepts absolute URLs.
+            const localVarUrlObj = new URL(localVarPath, DUMMY_BASE_URL);
+            let baseOptions;
+            if (configuration) {
+                baseOptions = configuration.baseOptions;
+            }
+
+            const localVarRequestOptions = { method: 'POST', ...baseOptions, ...options};
+            const localVarHeaderParameter = {} as any;
+            const localVarQueryParameter = {} as any;
+
+
+
+            localVarHeaderParameter['Content-Type'] = 'application/json';
+
+            setSearchParams(localVarUrlObj, localVarQueryParameter);
+            let headersFromBaseOptions = baseOptions && baseOptions.headers ? baseOptions.headers : {};
+            localVarRequestOptions.headers = {...localVarHeaderParameter, ...headersFromBaseOptions, ...options.headers};
+            localVarRequestOptions.data = serializeDataIfNeeded(roomCloneRequest, localVarRequestOptions, configuration)
+
+            return {
+                url: toPathString(localVarUrlObj),
+                options: localVarRequestOptions,
+            };
+        },
+        /**
          * 
          * @summary Create new room
          * @param {RoomSettings} roomSettings 
@@ -1553,6 +1606,20 @@ export const RoomsApiFp = function(configuration?: Configuration) {
             return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
         },
         /**
+         *
+         * @summary Clone a room and start the independent copy
+         * @param {string} roomId
+         * @param {RoomCloneRequest} roomCloneRequest
+         * @param {*} [options] Override http request option.
+         * @throws {RequiredError}
+         */
+        async roomClone(roomId: string, roomCloneRequest: RoomCloneRequest, options?: RawAxiosRequestConfig): Promise<(axios?: AxiosInstance, basePath?: string) => AxiosPromise<RoomEntry>> {
+            const localVarAxiosArgs = await localVarAxiosParamCreator.roomClone(roomId, roomCloneRequest, options);
+            const localVarOperationServerIndex = configuration?.serverIndex ?? 0;
+            const localVarOperationServerBasePath = operationServerMap['RoomsApi.roomClone']?.[localVarOperationServerIndex]?.url;
+            return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
+        },
+        /**
          * 
          * @summary Create new room
          * @param {RoomSettings} roomSettings 
@@ -1731,6 +1798,17 @@ export const RoomsApiFactory = function (configuration?: Configuration, basePath
             return localVarFp.exportAsDockerCompose(options).then((request) => request(axios, basePath));
         },
         /**
+         *
+         * @summary Clone a room and start the independent copy
+         * @param {string} roomId
+         * @param {RoomCloneRequest} roomCloneRequest
+         * @param {*} [options] Override http request option.
+         * @throws {RequiredError}
+         */
+        roomClone(roomId: string, roomCloneRequest: RoomCloneRequest, options?: RawAxiosRequestConfig): AxiosPromise<RoomEntry> {
+            return localVarFp.roomClone(roomId, roomCloneRequest, options).then((request) => request(axios, basePath));
+        },
+        /**
          * 
          * @summary Create new room
          * @param {RoomSettings} roomSettings 
@@ -1874,6 +1952,18 @@ export class RoomsApi extends BaseAPI {
         return RoomsApiFp(this.configuration).exportAsDockerCompose(options).then((request) => request(this.axios, this.basePath));
     }
 
+    /**
+     *
+     * @summary Clone a room and start the independent copy
+     * @param {string} roomId
+     * @param {RoomCloneRequest} roomCloneRequest
+     * @param {*} [options] Override http request option.
+     * @throws {RequiredError}
+     * @memberof RoomsApi
+     */
+    public roomClone(roomId: string, roomCloneRequest: RoomCloneRequest, options?: RawAxiosRequestConfig) {
+        return RoomsApiFp(this.configuration).roomClone(roomId, roomCloneRequest, options).then((request) => request(this.axios, this.basePath));
+    }
     /**
      * 
      * @summary Create new room
