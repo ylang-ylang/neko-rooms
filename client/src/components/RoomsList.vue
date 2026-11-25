@@ -1,6 +1,6 @@
 <template>
   <div>
-    <v-data-table :headers="headers" :items="rooms" class="elevation-1" :loading="loading"
+    <v-data-table :headers="headers" :items="rooms" class="room-list elevation-1" :loading="loading"
       loading-text="Loading... Please wait" hide-default-footer>
       <template v-slot:[`item.url`]="{ item }">
         <v-tooltip bottom open-delay="300">
@@ -18,15 +18,20 @@
           <span>Link to deployment</span>
         </v-tooltip>
       </template>
+      <template v-slot:[`item.name`]="{ item }">
+        <div class="room-name">{{ item.name }}</div>
+      </template>
       <template v-slot:[`item.neko_image`]="{ item }">
-        <RoomActionBtn action="recreate" :roomId="item.id" />
-        <span class="ml-3">{{ item.neko_image }}</span>
-        <v-tooltip bottom open-delay="300" v-if="item.is_outdated">
-          <template v-slot:activator="{ on, attrs }">
-            <v-icon v-bind="attrs" v-on="on" class="ml-2" color="warning">mdi-update</v-icon>
-          </template>
-          <div class="text-center">This image is outdated. <br> Recreate room to update it.</div>
-        </v-tooltip>
+        <div class="room-image d-flex align-center">
+          <RoomActionBtn action="recreate" :roomId="item.id" />
+          <span class="ml-3" :title="item.neko_image">{{ item.neko_image }}</span>
+          <v-tooltip bottom open-delay="300" v-if="item.is_outdated">
+            <template v-slot:activator="{ on, attrs }">
+              <v-icon v-bind="attrs" v-on="on" class="ml-2" color="warning">mdi-update</v-icon>
+            </template>
+            <div class="text-center">This image is outdated. <br> Recreate room to update it.</div>
+          </v-tooltip>
+        </div>
       </template>
       <template v-slot:[`item.max_connections`]="{ item }">
         <span v-if="item.max_connections > 0">{{ item.max_connections }}</span>
@@ -40,10 +45,12 @@
         {{ item.created | timeago }}
       </template>
       <template v-slot:[`item.actions`]="{ item }">
-        <RoomActionBtn action="start" :roomId="item.id" :disabled="item.running" />
-        <RoomActionBtn action="stop" :roomId="item.id" :disabled="!item.running && !item.paused" />
-        <RoomActionBtn action="pause" :roomId="item.id" :disabled="!item.running" />
-        <RoomActionBtn action="restart" :roomId="item.id" :disabled="!item.running" />
+        <div class="room-actions">
+          <RoomActionBtn action="start" :roomId="item.id" :disabled="item.running" />
+          <RoomActionBtn action="stop" :roomId="item.id" :disabled="!item.running && !item.paused" />
+          <RoomActionBtn action="pause" :roomId="item.id" :disabled="!item.running" />
+          <RoomActionBtn action="restart" :roomId="item.id" :disabled="!item.running" />
+        </div>
       </template>
       <template v-slot:[`item.agent`]="{ item }">
         <v-btn small outlined color="primary" :disabled="!item.name" @click="agentRoomName = item.name">
@@ -143,3 +150,21 @@ export default class RoomsList extends Vue {
   }
 }
 </script>
+
+<style scoped>
+.room-name {
+  min-width: 10rem;
+  overflow-wrap: anywhere;
+}
+.room-image {
+  min-width: 12rem;
+  max-width: 24rem;
+}
+.room-image span {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.room-actions {
+  white-space: nowrap;
+}
+</style>
