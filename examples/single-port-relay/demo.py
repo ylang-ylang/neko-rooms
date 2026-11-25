@@ -96,7 +96,7 @@ def hostname(value):
         ipaddress.ip_address(host)
     except ValueError:
         return host
-    fail("APP_HOST and TURN_HOST must be DNS names, not IP addresses (web SNI is required)")
+    fail("IP addressing requires explicit --lan-ip with --dev-ca --public")
 
 
 def reserved(host):
@@ -112,21 +112,36 @@ def port(values, key):
     return int(values[key])
 
 
-def validate_topology(values, dev_ca, public):
-    for key in ("APP_HOST", "TURN_HOST"):
-        values[key] = hostname(values[key])
-    if values["APP_HOST"] == values["TURN_HOST"]:
-        fail("APP_HOST and TURN_HOST must differ: explicit web SNI selects HTTPS, everything else selects TURN")
+def validate_topology(values, dev_ca, public, lan_ip=None):
     bind = ipaddress.IPv4Address(values["PUBLIC_BIND_IP"])
+    if lan_ip is not None:
+        if not dev_ca or not public:
+            fail("--lan-ip requires --dev-ca --public")
+        address = ipaddress.IPv4Address(lan_ip)
+        if not any(address in network for network in PRIVATE_RANGES):
+            fail("--lan-ip must be an RFC1918 IPv4 address")
+        if bind not in (ipaddress.IPv4Address("0.0.0.0"), address):
+            fail("--lan-ip requires PUBLIC_BIND_IP=0.0.0.0 or the selected LAN IP")
+        values["APP_HOST"] = values["TURN_HOST"] = str(address)
+    else:
+        for key in ("APP_HOST", "TURN_HOST"):
+            values[key] = hostname(values[key])
+        if dev_ca and (public or not bind.is_loopback or not all(
+                values[k].endswith(".localhost") for k in ("APP_HOST", "TURN_HOST"))):
+            fail("--dev-ca requires .localhost names and loopback binding, or explicit --lan-ip --public")
     if dev_ca:
-        if public or not bind.is_loopback or not all(values[k].endswith(".localhost") for k in ("APP_HOST", "TURN_HOST")):
-            fail("--dev-ca requires .localhost names and loopback binding, without --public")
         if values["TLS_CERT_FILE"] or values["TLS_KEY_FILE"]:
             fail("--dev-ca cannot also use supplied TLS_CERT_FILE/TLS_KEY_FILE")
     elif any(reserved(values[k]) for k in ("APP_HOST", "TURN_HOST")):
         fail("production requires real DNS names; local .localhost setup requires --dev-ca")
     if not bind.is_loopback and not public:
-        fail("non-loopback binding requires explicit --public and real DNS/certificate inputs")
+        fail("non-loopback binding requires explicit --public")
+    # HTTP ALPN is authoritative. Only distinct names can safely fall back to
+    # web SNI for older HTTP clients without ALPN; shared-name/no-ALPN is TURN.
+    values["WEB_SNI_ROUTE"] = (values["APP_HOST"] + " 127.0.0.1:8443;"
+                               if values["APP_HOST"] != values["TURN_HOST"] else "")
+    values["DEV_CA_LOCATION"] = ("location = /ca.crt { alias /run/relay/public/ca.crt; "
+                                 "default_type application/x-x509-ca-cert; }" if lan_ip is not None else "")
     port(values, "PUBLIC_PORT")
     low, high = port(values, "TURN_RELAY_MIN"), port(values, "TURN_RELAY_MAX")
     if low < 1024 or low > high:
@@ -148,6 +163,7 @@ def validate_topology(values, dev_ca, public):
     values["ROOM_PEER_RANGE"] = f"{network.network_address + 1}-{network.broadcast_address - 1}"
     authority = values["APP_HOST"] + (":" + values["PUBLIC_PORT"] if values["PUBLIC_PORT"] != "443" else "")
     values["PUBLIC_AUTHORITY"], values["PUBLIC_ORIGIN"] = authority, "https://" + authority
+    values["HTTP_AUTHORITY"] = values["APP_HOST"] + (":" + values["PUBLIC_PORT"] if values["PUBLIC_PORT"] != "80" else "")
     return network, turn_ip
 
 
@@ -174,7 +190,7 @@ def run_openssl(*args):
         fail("OpenSSL operation failed; check certificate, key, hostnames and validity")
 
 
-def development_cert(state, values):
+def development_cert(state, values, renew_server_cert=False):
     directory = state / "tls"
     if directory.is_symlink():
         fail("refusing a symlink TLS directory")
@@ -183,21 +199,38 @@ def development_cert(state, values):
     present = [(directory / name).exists() for name in names]
     if any(present) and not all(present):
         fail("incomplete existing development CA; refusing to replace trust material")
-    if not any(present):
+    existing = all(present)
+    if existing:
+        for name in names:
+            check_private_file(directory / name, "development trust material")
+    if not existing or renew_server_cert:
         with tempfile.TemporaryDirectory(prefix=".cert-", dir=directory) as temp:
             temp = Path(temp)
-            run_openssl("req", "-x509", "-newkey", "rsa:2048", "-nodes", "-days", "3650",
-                        "-subj", "/CN=Neko single-port local development CA",
-                        "-addext", "basicConstraints=critical,CA:TRUE", "-addext", "keyUsage=critical,keyCertSign,cRLSign",
-                        "-keyout", str(temp / "ca.key"), "-out", str(temp / "ca.crt"))
-            run_openssl("req", "-new", "-newkey", "rsa:2048", "-nodes", "-subj", "/CN=" + values["APP_HOST"],
-                        "-keyout", str(temp / "server.key"), "-out", str(temp / "server.csr"))
+            ca = directory if existing else temp
+            if not existing:
+                run_openssl("req", "-x509", "-newkey", "rsa:2048", "-nodes", "-days", "3650",
+                            "-subj", "/CN=Neko single-port local development CA",
+                            "-addext", "basicConstraints=critical,CA:TRUE", "-addext", "keyUsage=critical,keyCertSign,cRLSign",
+                            "-keyout", str(temp / "ca.key"), "-out", str(temp / "ca.crt"))
+            key = directory / "server.key" if existing else temp / "server.key"
+            key_args = ["-key", str(key)] if existing else ["-newkey", "rsa:2048", "-nodes", "-keyout", str(key)]
+            run_openssl("req", "-new", *key_args, "-subj", "/CN=" + values["APP_HOST"], "-out", str(temp / "server.csr"))
+            sans = []
+            for host in dict.fromkeys((values["APP_HOST"], values["TURN_HOST"])):
+                try:
+                    ipaddress.ip_address(host)
+                    sans.append("IP:" + host)
+                except ValueError:
+                    sans.append("DNS:" + host)
             (temp / "extensions").write_text("basicConstraints=critical,CA:FALSE\nkeyUsage=critical,digitalSignature,keyEncipherment\n"
-                                            "extendedKeyUsage=serverAuth\nsubjectAltName=DNS:" + values["APP_HOST"] + ",DNS:" + values["TURN_HOST"] + "\n")
-            run_openssl("x509", "-req", "-in", str(temp / "server.csr"), "-CA", str(temp / "ca.crt"),
-                        "-CAkey", str(temp / "ca.key"), "-set_serial", str(secrets.randbits(159) or 1), "-days", "30",
+                                            "extendedKeyUsage=serverAuth\nsubjectAltName=" + ",".join(sans) + "\n")
+            run_openssl("x509", "-req", "-in", str(temp / "server.csr"), "-CA", str(ca / "ca.crt"),
+                        "-CAkey", str(ca / "ca.key"), "-set_serial", str(secrets.randbits(159) or 1), "-days", "30",
                         "-extfile", str(temp / "extensions"), "-out", str(temp / "server.crt"))
-            for name in names:
+            check_certificate(temp / "server.crt", key, values)
+            run_openssl("verify", "-CAfile", str(ca / "ca.crt"), str(temp / "server.crt"))
+            # A renewal changes only the leaf, never the existing CA or key.
+            for name in (("server.crt",) if existing else names):
                 private_write(directory, name, (temp / name).read_text())
     for name in names:
         check_private_file(directory / name, "development trust material")
@@ -210,8 +243,13 @@ def check_certificate(cert, key, values):
         fail("TLS_CERT_FILE is missing")
     check_private_file(key, "TLS private key")
     ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER).load_cert_chain(cert, key, password="")
-    for host in (values["APP_HOST"], values["TURN_HOST"]):
-        run_openssl("x509", "-in", str(cert), "-noout", "-checkhost", host)
+    for host in dict.fromkeys((values["APP_HOST"], values["TURN_HOST"])):
+        try:
+            ipaddress.ip_address(host)
+            check = "-checkip"
+        except ValueError:
+            check = "-checkhost"
+        run_openssl("x509", "-in", str(cert), "-noout", check, host)
     run_openssl("x509", "-in", str(cert), "-noout", "-checkend", "0")
 
 
@@ -245,9 +283,11 @@ def compose_literal(value):
     return "'" + value.replace("'", "\\'") + "'"
 
 
-def configure(settings, state, dev_ca=False, public=False):
+def configure(settings, state, dev_ca=False, public=False, lan_ip=None, renew_server_cert=False):
+    if renew_server_cert and not dev_ca:
+        fail("--renew-server-cert requires --dev-ca; supplied production certificates are never modified")
     values = read_settings(settings)
-    network, turn_ip = validate_topology(values, dev_ca, public)
+    network, turn_ip = validate_topology(values, dev_ca, public, lan_ip)
     socket = absolute_path(values["DOCKER_SOCKET"], "DOCKER_SOCKET")
     if not socket.is_socket():
         fail("DOCKER_SOCKET must be the actual local Docker Unix socket")
@@ -278,8 +318,17 @@ def configure(settings, state, dev_ca=False, public=False):
     state.chmod(0o700)
     private_write(state, marker.name, MARKER)
     if dev_ca:
-        cert, key = development_cert(state, values)
+        cert, key = development_cert(state, values, renew_server_cert)
         check_certificate(cert, key, values)
+    # This mount contains only a public certificate, never private TLS/auth files.
+    public_directory = state / "public"
+    if public_directory.is_symlink():
+        fail("refusing a symlink public certificate directory")
+    public_directory.mkdir(mode=0o755, exist_ok=True)
+    public_directory.chmod(0o755)
+    if lan_ip is not None:
+        private_write(public_directory, "ca.crt", (state / "tls/ca.crt").read_text())
+        (public_directory / "ca.crt").chmod(0o644)
     storage = state / "storage"
     if storage.is_symlink():
         fail("refusing symlink storage; this demo never reuses existing installation data")
@@ -323,14 +372,16 @@ def main():
     config = sub.add_parser("configure", help="validate/render private state; do not start containers")
     config.add_argument("--env-file", required=True, type=Path)
     config.add_argument("--state-dir", required=True, type=Path)
-    config.add_argument("--dev-ca", action="store_true", help="explicit local .localhost CA/cert generation; loopback only")
-    config.add_argument("--public", action="store_true", help="explicitly permit non-loopback real-DNS deployment")
+    config.add_argument("--dev-ca", action="store_true", help="generate/reuse a private development CA for .localhost or explicit LAN mode")
+    config.add_argument("--public", action="store_true", help="explicitly permit non-loopback binding")
+    config.add_argument("--lan-ip", help="RFC1918 IPv4 for BOTH HTTPS and TURN; requires --dev-ca --public and a matching/non-loopback bind")
+    config.add_argument("--renew-server-cert", action="store_true", help="explicitly renew only the development leaf certificate; keep existing CA, keys and credentials")
     for name in ("up", "down", "status"):
         sub.add_parser(name).add_argument("--state-dir", required=True, type=Path)
     args = parser.parse_args()
     try:
         if args.command == "configure":
-            state = configure(args.env_file, args.state_dir, args.dev_ca, args.public)
+            state = configure(args.env_file, args.state_dir, args.dev_ca, args.public, args.lan_ip, args.renew_server_cert)
             print(f"Private config: {state}/compose.env\nCredentials: {state}/credentials.json (not printed; no services started)")
             if args.dev_ca:
                 print(f"Explicit browser trust required: {state}/tls/ca.crt (no automatic OS/browser changes)")

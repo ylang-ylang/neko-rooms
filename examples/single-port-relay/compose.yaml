@@ -14,6 +14,12 @@ services:
         target: /etc/nginx/nginx.conf
         read_only: true
         bind: {create_host_path: false}
+      # Only a public CA certificate may be placed here by explicit LAN mode.
+      - type: bind
+        source: ${RELAY_STATE_DIR:?run demo.py configure}/public
+        target: /run/relay/public
+        read_only: true
+        bind: {create_host_path: false}
       - type: bind
         source: ${TLS_CERT_FILE:?run demo.py configure}
         target: /run/relay/tls.crt

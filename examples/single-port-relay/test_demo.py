@@ -6,6 +6,7 @@ import ipaddress
 import json
 import os
 from pathlib import Path
+import re
 import shutil
 import socket
 import stat
@@ -36,10 +37,11 @@ class TopologyTests(unittest.TestCase):
                 expected = "https://neko.localhost" + (":" + str(int(selected)) if int(selected) != 443 else "")
                 self.assertEqual(values["PUBLIC_ORIGIN"], expected)
                 self.assertEqual(values["PUBLIC_PORT"], str(int(selected)))
+                self.assertEqual(values["HTTP_AUTHORITY"], "neko.localhost:" + str(int(selected)))
 
     def test_unsafe_explicit_settings_fail(self):
         invalid = [
-            {"APP_HOST": "turn.localhost"}, {"APP_HOST": "127.0.0.1"}, {"APP_HOST": "https://neko.localhost"},
+            {"APP_HOST": "127.0.0.1"}, {"APP_HOST": "https://neko.localhost"},
             {"APP_HOST": "bad..localhost"}, {"APP_HOST": "-bad.localhost"}, {"PUBLIC_BIND_IP": "0.0.0.0"},
             {"PUBLIC_PORT": "0"}, {"PUBLIC_PORT": "65536"}, {"PUBLIC_PORT": "443/udp"},
             {"TURN_RELAY_MIN": "1023"}, {"TURN_RELAY_MIN": "50000", "TURN_RELAY_MAX": "49000"},
@@ -54,7 +56,7 @@ class TopologyTests(unittest.TestCase):
                 with self.assertRaises(ValueError):
                     demo.validate_topology(settings(**changes), dev_ca=True, public=False)
 
-    def test_dev_ca_never_enables_public_binding(self):
+    def test_dev_ca_requires_explicit_lan_mode_for_public_binding(self):
         with self.assertRaises(ValueError):
             demo.validate_topology(settings(), dev_ca=True, public=True)
         with self.assertRaises(ValueError):
@@ -64,13 +66,59 @@ class TopologyTests(unittest.TestCase):
             demo.validate_topology(real.copy(), dev_ca=False, public=False)
         demo.validate_topology(real, dev_ca=False, public=True)
 
-    def test_sni_preread_defaults_to_turn_not_http(self):
+    def test_explicit_lan_uses_same_ip_and_port_without_web_sni(self):
+        for address in ("10.2.3.4", "172.16.1.2", "192.168.201.237"):
+            for bind in ("0.0.0.0", address):
+                with self.subTest(address=address, bind=bind):
+                    values = settings(PUBLIC_BIND_IP=bind)
+                    demo.validate_topology(values, dev_ca=True, public=True, lan_ip=address)
+                    self.assertEqual(values["APP_HOST"], address)
+                    self.assertEqual(values["TURN_HOST"], address)
+                    self.assertEqual(values["PUBLIC_ORIGIN"], f"https://{address}:8443")
+                    self.assertEqual(values["WEB_SNI_ROUTE"], "", "shared IP must not route TURN SNI to HTTPS")
+                    self.assertIn("location = /ca.crt", values["DEV_CA_LOCATION"])
+
+    def test_lan_requires_explicit_flags_rfc1918_and_matching_bind(self):
+        for dev_ca, public in ((False, False), (False, True), (True, False)):
+            with self.subTest(dev_ca=dev_ca, public=public), self.assertRaises(ValueError):
+                demo.validate_topology(settings(PUBLIC_BIND_IP="0.0.0.0"), dev_ca, public, "192.168.201.237")
+        for address in ("8.8.8.8", "127.0.0.1", "100.64.0.1", "169.254.1.1", "198.18.0.1", "192.0.2.1", "::1", "fd00::1"):
+            with self.subTest(address=address), self.assertRaises(ValueError):
+                demo.validate_topology(settings(PUBLIC_BIND_IP="0.0.0.0"), True, True, address)
+        for bind in ("127.0.0.1", "192.168.201.238"):
+            with self.subTest(bind=bind), self.assertRaises(ValueError):
+                demo.validate_topology(settings(PUBLIC_BIND_IP=bind), True, True, "192.168.201.237")
+        with self.assertRaises(ValueError):
+            demo.validate_topology(settings(PUBLIC_BIND_IP="0.0.0.0", TLS_CERT_FILE="/provided.crt"), True, True, "192.168.201.237")
+
+    def test_shared_dns_identity_uses_alpn_without_ambiguous_sni_fallback(self):
+        for host, dev_ca in (("neko.localhost", True), ("rooms.real-domain.org", False)):
+            values = settings(APP_HOST=host, TURN_HOST=host)
+            demo.validate_topology(values, dev_ca, public=False)
+            self.assertEqual(values["WEB_SNI_ROUTE"], "")
+            self.assertEqual(values["DEV_CA_LOCATION"], "")
+        values = settings()
+        demo.validate_topology(values, True, False)
+        self.assertEqual(values["WEB_SNI_ROUTE"], "neko.localhost 127.0.0.1:8443;")
+
+    def test_alpn_http_ip_routing_preserves_default_turn_and_legacy_web_sni(self):
         nginx = (HERE / "nginx.conf.template").read_text()
-        self.assertIn("map $ssl_preread_server_name $tls_backend", nginx)
-        self.assertIn("@APP_HOST@ 127.0.0.1:8443;", nginx)
+        self.assertIn("map $ssl_preread_server_name $sni_backend", nginx)
+        self.assertIn("@WEB_SNI_ROUTE@", nginx)
+        self.assertIn("map $ssl_preread_alpn_protocols $tls_backend", nginx)
+        self.assertIn('"" $sni_backend;', nginx)
         self.assertIn("default 127.0.0.1:5349;", nginx)
+        http_alpn = re.search(r"\n\s+~(\S+) 127.0.0.1:8443;", nginx).group(1)
+        for offered in ("h2", "http/1.1", "h2,http/1.1", "stun.turn,http/1.1"):
+            self.assertRegex(offered, http_alpn)
+        for offered in ("", "stun.turn", "stun.nat-discovery", "h2c", "not-h2", "http/1x1", "http/1.10"):
+            self.assertNotRegex(offered, http_alpn)
+        self.assertIn("map $ssl_preread_protocol $entry_backend", nginx)
+        self.assertIn('"" 127.0.0.1:8081;', nginx)
+        self.assertIn("proxy_pass $entry_backend;", nginx)
         self.assertIn("listen 443;\n        ssl_preread on;", nginx)
         self.assertNotIn("listen 443 ssl", nginx)
+        self.assertIn("listen 127.0.0.1:8081;", nginx)
         self.assertIn("listen 127.0.0.1:8443 ssl;", nginx)
         self.assertIn("listen 127.0.0.1:5349 ssl;", nginx)
         self.assertEqual(nginx.count("resolver 127.0.0.11 valid=10s ipv6=off;"), 2)
@@ -133,8 +181,13 @@ class ConfigurationTests(unittest.TestCase):
         self.env.write_text("\n".join(k + "=" + v for k, v in self.values.items()) + "\n")
         self.env.chmod(0o600)
 
-    def configure(self):
-        return demo.configure(self.env, self.state, dev_ca=True)
+    def configure(self, **options):
+        return demo.configure(self.env, self.state, dev_ca=True, **options)
+
+    def configure_lan(self, **options):
+        self.values["PUBLIC_BIND_IP"] = "0.0.0.0"
+        self.write_settings()
+        return self.configure(public=True, lan_ip="192.168.201.237", **options)
 
     def test_literal_settings_and_rejects_unknown_duplicate_or_missing(self):
         self.assertEqual(demo.read_settings(self.env)["OWNER_PASSWORD"], self.values["OWNER_PASSWORD"])
@@ -228,6 +281,96 @@ class ConfigurationTests(unittest.TestCase):
             self.configure()
         self.assertEqual((self.state / "tls/server.crt").read_bytes(), previous)
 
+    def test_lan_leaf_has_ip_san_and_checks_ip_not_dns(self):
+        self.configure_lan()
+        cert, key = self.state / "tls/server.crt", self.state / "tls/server.key"
+        demo.run_openssl("verify", "-CAfile", str(self.state / "tls/ca.crt"), "-verify_ip", "192.168.201.237", str(cert))
+        with mock.patch.object(demo, "run_openssl", wraps=demo.run_openssl) as openssl:
+            demo.check_certificate(cert, key, {"APP_HOST": "192.168.201.237", "TURN_HOST": "192.168.201.237"})
+        self.assertEqual(sum("-checkip" in call.args for call in openssl.call_args_list), 1)
+        self.assertFalse(any("-checkhost" in call.args for call in openssl.call_args_list))
+        with self.assertRaises(ValueError):
+            demo.check_certificate(cert, key, {"APP_HOST": "192.168.201.238", "TURN_HOST": "192.168.201.238"})
+        # A DNS SAN containing an IP's text is NOT a valid IP identity.
+        dns_cert, dns_key = self.root / "dns-only.crt", self.root / "dns-only.key"
+        demo.run_openssl("req", "-x509", "-newkey", "rsa:2048", "-nodes", "-days", "1",
+                         "-subj", "/CN=192.168.201.237", "-addext", "subjectAltName=DNS:192.168.201.237",
+                         "-keyout", str(dns_key), "-out", str(dns_cert))
+        with self.assertRaises(ValueError):
+            demo.check_certificate(dns_cert, dns_key, {"APP_HOST": "192.168.201.237", "TURN_HOST": "192.168.201.237"})
+
+    def test_explicit_leaf_renewal_migrates_to_lan_without_rotating_private_state(self):
+        self.configure()
+        previous = {name: (self.state / name).read_bytes() for name in
+                    ("credentials.json", "tls/ca.crt", "tls/ca.key", "tls/server.key", "room-request.json")}
+        old_leaf = (self.state / "tls/server.crt").read_bytes()
+        (self.state / "storage" / "owned-data").write_text("keep profile and downloads")
+        with self.assertRaises(ValueError):
+            self.configure_lan()
+        self.assertEqual((self.state / "tls/server.crt").read_bytes(), old_leaf)
+        self.configure_lan(renew_server_cert=True)
+        self.assertNotEqual((self.state / "tls/server.crt").read_bytes(), old_leaf)
+        self.assertTrue(all((self.state / name).read_bytes() == content for name, content in previous.items()),
+                        "LAN migration must preserve existing CA, key, every credential and room payload")
+        self.assertEqual((self.state / "storage" / "owned-data").read_text(), "keep profile and downloads")
+        manager = dict(line.split("=", 1) for line in (self.state / "manager.env").read_text().splitlines())
+        self.assertEqual(manager["NEKO_ROOMS_ADMIN_PASSWORD"], self.values["OWNER_PASSWORD"])
+        self.assertEqual(manager["NEKO_ROOMS_ADMIN_USERNAME"], self.values["OWNER_USERNAME"])
+        ice = json.loads(manager["NEKO_ROOMS_RELAY_ICE_SERVERS_FRONTEND"])[0]
+        saved = json.loads(previous["credentials.json"])
+        self.assertEqual(ice["urls"], ["turns:192.168.201.237:8443?transport=tcp"])
+        self.assertEqual((ice["username"], ice["credential"]), (saved["turn_username"], saved["turn_password"]))
+        repeated = {path: path.read_bytes() for path in self.state.rglob("*") if path.is_file()}
+        self.configure_lan()
+        self.assertTrue(all(path.read_bytes() == content for path, content in repeated.items()),
+                        "repeat LAN configure without explicit renewal must be idempotent")
+
+    def test_leaf_renewal_never_replaces_ca_or_supplied_certificates(self):
+        with self.assertRaisesRegex(ValueError, "requires --dev-ca"):
+            demo.configure(self.env, self.state, renew_server_cert=True)
+        self.assertFalse(self.state.exists())
+        self.configure()
+        previous_ca = (self.state / "tls/ca.crt").read_bytes()
+        (self.state / "tls/server.crt").unlink()
+        with self.assertRaisesRegex(ValueError, "incomplete existing development CA"):
+            self.configure(renew_server_cert=True)
+        self.assertEqual((self.state / "tls/ca.crt").read_bytes(), previous_ca)
+        self.assertFalse((self.state / "tls/server.crt").exists())
+
+    def test_lan_http_bootstrap_serves_only_public_ca_and_redirects_to_same_authority(self):
+        self.configure()
+        self.assertNotIn("location = /ca.crt", (self.state / "nginx.conf").read_text())
+        self.assertFalse(list((self.state / "public").iterdir()))
+        self.configure_lan(renew_server_cert=True)
+        public = self.state / "public"
+        self.assertEqual([path.name for path in public.iterdir()], ["ca.crt"])
+        self.assertEqual((public / "ca.crt").read_bytes(), (self.state / "tls/ca.crt").read_bytes())
+        self.assertEqual(stat.S_IMODE(public.stat().st_mode), 0o755)
+        self.assertEqual(stat.S_IMODE((public / "ca.crt").stat().st_mode), 0o644)
+        for name in ("tls/ca.key", "tls/ca.crt", "tls/server.key", "credentials.json", "manager.env", "room-request.json"):
+            self.assertEqual(stat.S_IMODE((self.state / name).stat().st_mode), 0o600, name)
+        nginx = (self.state / "nginx.conf").read_text()
+        self.assertIn("location = /ca.crt { alias /run/relay/public/ca.crt;", nginx)
+        self.assertIn("return 308 https://192.168.201.237:8443$request_uri;", nginx)
+        self.assertIn('"192.168.201.237:8443" 1;', nginx)
+        self.assertIn("if ($valid_host = 0) { return 421; }", nginx)
+        self.assertIn("if ($valid_http_host = 0) { return 421; }", nginx)
+        self.assertNotIn("192.168.201.237 127.0.0.1:8443;", nginx)
+        self.assertNotRegex(nginx, r"alias .*?(?:key|credentials|manager\.env)")
+        for header in ("Host $http_host", "X-Forwarded-Host $http_host", "X-Forwarded-Proto https", "X-Forwarded-Port 8443"):
+            self.assertIn("proxy_set_header " + header + ";", nginx)
+
+    def test_lan_bootstrap_authority_uses_http_port_rules_not_https_port_rules(self):
+        for selected, http_authority, https_authority in (
+                ("443", "192.168.201.237:443", "192.168.201.237"),
+                ("80", "192.168.201.237", "192.168.201.237:80")):
+            with self.subTest(port=selected):
+                self.values["PUBLIC_PORT"] = selected
+                self.configure_lan()
+                nginx = (self.state / "nginx.conf").read_text()
+                self.assertIn(f'map $http_host $valid_http_host {{ default 0; "{http_authority}" 1; }}', nginx)
+                self.assertIn("return 308 https://" + https_authority + "$request_uri;", nginx)
+
     def test_checkout_and_unowned_state_are_refused(self):
         with self.assertRaisesRegex(ValueError, "outside the source checkout"):
             demo.configure(self.env, demo.ROOT / "must-not-create-single-port-test", dev_ca=True)
@@ -293,6 +436,36 @@ class ConfigurationTests(unittest.TestCase):
         self.assertEqual(gateway_mount["source"], str(self.state / "nginx.conf"))
         self.assertEqual(env["NEKO_ROOMS_STORAGE_EXTERNAL"], str(self.state / "storage"))
         self.assertTrue(project["networks"]["rooms"]["external"])
+
+    def test_actual_lan_compose_keeps_native_relay_one_tcp_port_and_literal_auth(self):
+        if not shutil.which("docker") or subprocess.run(["docker", "compose", "version"], capture_output=True).returncode:
+            self.skipTest("Docker Compose unavailable; source-only contracts still run")
+        self.configure_lan()
+        environment = {k: v for k, v in os.environ.items() if k not in demo.COMPOSE_KEYS}
+        result = subprocess.run(demo.compose_command(self.state, ["config", "--format", "json"]),
+                                env=environment, capture_output=True, text=True)
+        self.assertEqual(result.returncode, 0, "Compose config rejected LAN input (output withheld)")
+        services = json.loads(result.stdout.replace("$$", "$"))["services"]
+        ports = services["gateway"]["ports"]
+        self.assertEqual(len(ports), 1)
+        self.assertEqual((ports[0]["host_ip"], ports[0]["published"], ports[0]["target"], ports[0]["protocol"]),
+                         ("0.0.0.0", "8443", 443, "tcp"))
+        self.assertFalse(services["turn"].get("ports"))
+        self.assertFalse(services["neko-rooms"].get("ports"))
+        env = services["neko-rooms"]["environment"]
+        self.assertEqual(env["NEKO_ROOMS_NETWORK_MODE"], "relay")
+        self.assertEqual(env["NEKO_ROOMS_NEKO_IMAGES"], demo.ROOM_IMAGE)
+        self.assertEqual(env["NEKO_ROOMS_INSTANCE_URL"], "https://192.168.201.237:8443/")
+        self.assertEqual(env["NEKO_ROOMS_AGENT_PUBLIC_URL"], "https://192.168.201.237:8443/rooms/")
+        self.assertEqual(env["NEKO_ROOMS_ADMIN_USERNAME"], self.values["OWNER_USERNAME"])
+        self.assertEqual(env["NEKO_ROOMS_ADMIN_PASSWORD"], self.values["OWNER_PASSWORD"])
+        self.assertEqual(json.loads(env["NEKO_ROOMS_RELAY_ICE_SERVERS_FRONTEND"])[0]["urls"],
+                         ["turns:192.168.201.237:8443?transport=tcp"])
+        mounts = services["gateway"]["volumes"]
+        public_mount = next(v for v in mounts if v["target"] == "/run/relay/public")
+        self.assertEqual(public_mount["source"], str(self.state / "public"))
+        self.assertTrue(public_mount["read_only"])
+        self.assertFalse(any(v["source"].endswith(("ca.key", "credentials.json", "manager.env")) for v in mounts))
 
 
 if __name__ == "__main__":
