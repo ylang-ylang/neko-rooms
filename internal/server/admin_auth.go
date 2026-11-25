@@ -4,6 +4,7 @@ import (
 	"crypto/rand"
 	"crypto/sha256"
 	"crypto/subtle"
+	_ "embed"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
@@ -432,22 +433,10 @@ func (a *adminAuth) withoutOwnerCredentials(next http.Handler) http.Handler {
 	})
 }
 
-var adminLoginTemplate = template.Must(template.New("admin-login").Parse(`<!doctype html>
-<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Sign in · Neko Rooms</title>
-<style>
-* { box-sizing: border-box; } body { margin: 0; min-height: 100vh; display: grid; place-items: center; background: #f4f6fa; color: #18233b; font-family: system-ui, sans-serif; }
-main { width: min(26rem, 92vw); padding: 2rem; background: white; border: 1px solid #dce2ed; border-radius: 1rem; }
-h1 { margin: 0 0 .5rem; font-size: 1.6rem; } p { line-height: 1.5; } label { display: block; margin: 1rem 0 .4rem; font-weight: 600; }
-input, button { width: 100%; padding: .75rem; border: 1px solid #aab6cb; border-radius: .4rem; font: inherit; } button { margin-top: 1.5rem; background: #285bcb; color: white; border: 0; font-weight: 600; cursor: pointer; }
-.error { color: #a51d2d; } :focus-visible { outline: 3px solid #83abff; outline-offset: 2px; }
-</style></head><body><main><h1>Neko Rooms</h1><p>Sign in to manage your rooms.</p>
-{{if .Error}}<p class="error" role="alert">{{.Error}}</p>{{end}}
-<form method="post" action="{{.Action}}" autocomplete="on">
-<input type="hidden" name="next" value="{{.Next}}">
-<label for="username">Username</label><input id="username" name="username" type="text" autocomplete="username" value="{{.Username}}" required autofocus>
-<label for="password">Password</label><input id="password" name="password" type="password" autocomplete="current-password" required>
-<button type="submit">Sign in</button></form></main></body></html>`))
+//go:embed admin_auth_login.html
+var adminLoginHTML string
+
+var adminLoginTemplate = template.Must(template.New("admin-login").Parse(adminLoginHTML))
 
 func (a *adminAuth) loginPage(w http.ResponseWriter, status int, message, username, next string) {
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
