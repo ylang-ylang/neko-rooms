@@ -112,7 +112,9 @@ def port(values, key):
     return int(values[key])
 
 
-def validate_topology(values, dev_ca, public, lan_ip=None):
+def validate_topology(values, dev_ca, public, lan_ip=None, turn_host=None):
+    if turn_host is not None and lan_ip is None:
+        fail("--turn-host requires explicit --lan-ip --dev-ca --public")
     bind = ipaddress.IPv4Address(values["PUBLIC_BIND_IP"])
     if lan_ip is not None:
         if not dev_ca or not public:
@@ -122,7 +124,12 @@ def validate_topology(values, dev_ca, public, lan_ip=None):
             fail("--lan-ip must be an RFC1918 IPv4 address")
         if bind not in (ipaddress.IPv4Address("0.0.0.0"), address):
             fail("--lan-ip requires PUBLIC_BIND_IP=0.0.0.0 or the selected LAN IP")
-        values["APP_HOST"] = values["TURN_HOST"] = str(address)
+        values["APP_HOST"] = str(address)
+        # Do not inherit the localhost/DNS settings value into explicit LAN mode.
+        # Firefox requires a FQDN for TURN/TLS even when HTTPS works by IP.
+        values["TURN_HOST"] = str(address) if turn_host is None else hostname(turn_host)
+        if turn_host is not None and values["TURN_HOST"].endswith(".localhost"):
+            fail("--turn-host must be a non-.localhost FQDN resolvable by LAN clients")
     else:
         for key in ("APP_HOST", "TURN_HOST"):
             values[key] = hostname(values[key])
@@ -283,11 +290,11 @@ def compose_literal(value):
     return "'" + value.replace("'", "\\'") + "'"
 
 
-def configure(settings, state, dev_ca=False, public=False, lan_ip=None, renew_server_cert=False):
+def configure(settings, state, dev_ca=False, public=False, lan_ip=None, renew_server_cert=False, turn_host=None):
     if renew_server_cert and not dev_ca:
         fail("--renew-server-cert requires --dev-ca; supplied production certificates are never modified")
     values = read_settings(settings)
-    network, turn_ip = validate_topology(values, dev_ca, public, lan_ip)
+    network, turn_ip = validate_topology(values, dev_ca, public, lan_ip, turn_host)
     socket = absolute_path(values["DOCKER_SOCKET"], "DOCKER_SOCKET")
     if not socket.is_socket():
         fail("DOCKER_SOCKET must be the actual local Docker Unix socket")
@@ -374,14 +381,15 @@ def main():
     config.add_argument("--state-dir", required=True, type=Path)
     config.add_argument("--dev-ca", action="store_true", help="generate/reuse a private development CA for .localhost or explicit LAN mode")
     config.add_argument("--public", action="store_true", help="explicitly permit non-loopback binding")
-    config.add_argument("--lan-ip", help="RFC1918 IPv4 for BOTH HTTPS and TURN; requires --dev-ca --public and a matching/non-loopback bind")
+    config.add_argument("--lan-ip", help="RFC1918 IPv4 for HTTPS (and TURN unless --turn-host is set); requires --dev-ca --public and a matching/non-loopback bind")
+    config.add_argument("--turn-host", help="explicit TURN FQDN resolving to the LAN IP, required by Firefox TURN/TLS; LAN mode only")
     config.add_argument("--renew-server-cert", action="store_true", help="explicitly renew only the development leaf certificate; keep existing CA, keys and credentials")
     for name in ("up", "down", "status"):
         sub.add_parser(name).add_argument("--state-dir", required=True, type=Path)
     args = parser.parse_args()
     try:
         if args.command == "configure":
-            state = configure(args.env_file, args.state_dir, args.dev_ca, args.public, args.lan_ip, args.renew_server_cert)
+            state = configure(args.env_file, args.state_dir, args.dev_ca, args.public, args.lan_ip, args.renew_server_cert, args.turn_host)
             print(f"Private config: {state}/compose.env\nCredentials: {state}/credentials.json (not printed; no services started)")
             if args.dev_ca:
                 print(f"Explicit browser trust required: {state}/tls/ca.crt (no automatic OS/browser changes)")

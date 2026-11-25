@@ -1,6 +1,6 @@
 # Native Neko, HTTPS + TURN/TLS on one TCP port
 
-Open **`https://neko.localhost:8443/manage/`**, create a room, then use **`https://neko.localhost:8443/room/native/`**. For another device on your LAN, use the [direct-IP configuration below](#direct-lan-access-without-ssh-or-dns). The viewer is the room image's **original Neko 3.2 UI and WebRTC**, including its native controls, audio, clipboard and other features. No copied frontend, MSE player, `aggregate.html`, or Manager `http` mode is used.
+Open **`https://neko.localhost:8443/manage/`**, create a room, then use **`https://neko.localhost:8443/room/native/`**. For another device on your LAN, use the [direct-IP configuration below](#direct-lan-access-without-ssh). The viewer is the room image's **original Neko 3.2 UI and WebRTC**, including its native controls, audio, clipboard and other features. No copied frontend, MSE player, `aggregate.html`, or Manager `http` mode is used.
 
 This is a **fresh, local, single-Docker-host example** in the Manager project. It does not modify an existing installation, NAS, Neko server, room image or management UI. [The two-port example](../relay/) remains separate.
 
@@ -16,7 +16,7 @@ one published TCP socket: <chosen-bind>:8443 -> gateway:443
 
 The loopback addresses above are **inside the gateway container**, not additional host bindings. Only its `443/tcp` is published. Coturn, Manager and Manager-created relay rooms publish no host ports; the UDP allocation pool is private. Docker DNS is re-resolved for Manager/coturn after container recreation.
 
-Modern browsers advertise **HTTP ALPN** (`h2` / `http/1.1`) even for an IP-only HTTPS URL without SNI; this selects HTTPS. Native TURN/TLS uses different or no ALPN, with **TURN as the default TLS branch**. For distinct application/TURN names, application-name SNI is a legacy HTTP fallback only when ALPN is absent. A shared identity, including a LAN IP, disables that ambiguous fallback: HTTPS uses HTTP ALPN, and no-ALPN TLS remains TURN. DNS names are not required for LAN mode. Public ingress must forward **raw TCP at layer 4**, preserving ClientHello; an ordinary HTTP reverse proxy cannot carry TURN.
+Modern browsers advertise **HTTP ALPN** (`h2` / `http/1.1`) even for an IP-only HTTPS URL without SNI; this selects HTTPS. Native TURN/TLS uses different or no ALPN, with **TURN as the default TLS branch**. For distinct application/TURN names, application-name SNI is a legacy HTTP fallback only when ALPN is absent. A shared identity, including a LAN IP, disables that ambiguous fallback: HTTPS uses HTTP ALPN, and no-ALPN TLS remains TURN. The web URL can remain a LAN IP, but **Firefox TURN/TLS requires a FQDN**, as described below. Public ingress must forward **raw TCP at layer 4**, preserving ClientHello; an ordinary HTTP reverse proxy cannot carry TURN.
 
 ## Requirements
 
@@ -70,7 +70,7 @@ python3 examples/single-port-relay/demo.py configure \
 STATE="$PRIVATE/state"
 ```
 
-Settings are **literal `KEY=value`**, not shell or dotenv: no interpolation, escapes, inline comments or removal of surrounding quotes. A dollar sign, `#`, backslash or quote in a supplied owner password is an actual character. Do not `source` the file. Unknown, duplicate, invalid and incomplete values fail instead of falling back. DNS mode uses `APP_HOST`, `TURN_HOST` and **`PUBLIC_PORT`**; LAN mode sets both hosts through `--lan-ip`. There are no separate HTTPS/TURN public ports.
+Settings are **literal `KEY=value`**, not shell or dotenv: no interpolation, escapes, inline comments or removal of surrounding quotes. A dollar sign, `#`, backslash or quote in a supplied owner password is an actual character. Do not `source` the file. Unknown, duplicate, invalid and incomplete values fail instead of falling back. DNS mode uses `APP_HOST`, `TURN_HOST` and **`PUBLIC_PORT`**; LAN mode uses `--lan-ip` for HTTPS and optional `--turn-host` for TURN. There are no separate HTTPS/TURN public ports.
 
 Without `--lan-ip`, `--dev-ca` requires **`.localhost`** names and a loopback bind, without `--public`. Defaults remain `neko.localhost`, `turn.localhost`, `127.0.0.1`, port `8443`. Modern browsers resolve `.localhost` to loopback; if another client does not, use that client's explicit resolution option. Development CA mode never accepts supplied TLS paths. No DNS/hosts/trust store is changed automatically.
 
@@ -83,33 +83,38 @@ Generated state stays **outside the checkout** (state directory `700`, private f
 | `credentials.json` | Independent new Owner, native room user/admin and TURN credentials |
 | `nginx.conf`, `turnserver.conf` | Complete gateway and private coturn configuration |
 | `tls/ca.crt`, `tls/ca.key` | Local development CA; only import the **certificate**, never its key |
-| `tls/server.crt`, `tls/server.key` | 30-day server certificate covering the configured DNS names or LAN **IP SAN** |
+| `tls/server.crt`, `tls/server.key` | 30-day server certificate covering the configured **IP and/or DNS SANs** |
 | `public/ca.crt` | LAN-dev-only public CA certificate copy (`644`, directory `755`), mounted read-only; never a key or credentials |
 | `room-request.json` | Optional native `api_version: 3` Owner API creation payload, name `native` |
 | `storage/` | Fresh demo-only Profile/Downloads data; no existing installation path is used |
 
 Repeated configure reuses credentials, CA, certificate and storage. It refuses implicit credential rotation, a changed SAN not covered by the existing certificate, partial trust material and an unrelated nonempty state directory. To change SANs or renew an expired development leaf, explicitly add **`--renew-server-cert`**: only `server.crt` is replaced, retaining the existing CA, server key, credentials and storage. Replacing the CA itself requires a deliberately new demo state/project.
 
-### Direct LAN access without SSH or DNS
+### Direct LAN access without SSH
 
-For example, if the Docker host's LAN address is `192.168.201.237`, set **`PUBLIC_BIND_IP=0.0.0.0`** (or that LAN IP) and **`PUBLIC_PORT=8443`** in your private settings, then configure:
+**IP HTTPS and TURN/TLS have different client requirements.** Firefox 155 on Linux rejects IP-literal `turns:` URLs with `TLS requires FQDN, not IP address` before the TLS handshake, even after CA import. Keep the web URL as an IP, but configure a **TURN FQDN** for Firefox. Omitting `--turn-host` retains the old IP TURN mode only for clients that support it; IP HTTPS success is not proof of IP TURN compatibility.
+
+For example, if the Docker host's LAN address is `192.168.201.237`, set **`PUBLIC_BIND_IP=0.0.0.0`** (or that LAN IP) and **`PUBLIC_PORT=8443`** in your private settings. Choose a hostname that the **client's DNS resolves to that LAN IP**, then configure:
 
 ```sh
+TURN_FQDN=debian-vm-2.lan # Example LAN DNS name; use your client-resolvable FQDN.
 python3 examples/single-port-relay/demo.py configure \
   --env-file "$PRIVATE/settings.env" --state-dir "$STATE" \
-  --lan-ip 192.168.201.237 --dev-ca --public
+  --lan-ip 192.168.201.237 --turn-host "$TURN_FQDN" --dev-ca --public
 ```
 
-`--lan-ip` accepts an explicit RFC1918 IPv4 address and sets **both** HTTPS and TURN hosts to it. When migrating an existing `.localhost` state, back up its server certificate and add **`--renew-server-cert` once** to issue the IP-SAN leaf using the same CA and server key. Keep the LAN flags on subsequent configure runs, but omit renewal unless needed. Browsers already trusting that CA need no re-import; a new client must still import it once.
+`--turn-host` is accepted only with explicit LAN mode (`--lan-ip --dev-ca --public`), must be a non-IP, non-`.localhost` FQDN, and is not inherited from settings `TURN_HOST`. Configure validates syntax but never changes DNS/hosts or verifies client DNS resolution. The leaf covers **IP:192.168.201.237 plus DNS:TURN_FQDN**.
+
+When adding the hostname to an existing IP-only or `.localhost` state, back up its server certificate and add **`--renew-server-cert` once**: only the leaf changes, preserving the CA, server key, credentials and storage. Keep both LAN identity flags on subsequent configure runs; omit renewal unless needed. Browsers already trusting that CA need no re-import; a new client must still import it once. For an already running demo, use `dc up -d --force-recreate` with the section 3 helper to reload generated mounts/config, then recreate only your sample room to receive the new frontend ICE URL.
 
 Start the services using section 3, then use these URLs directly from the LAN client:
 
 - Download the **public CA certificate only**: http://192.168.201.237:8443/ca.crt — import it as a trusted website CA before using HTTPS/TURN.
 - Owner UI: https://192.168.201.237:8443/manage/
 - Native viewer, after creating room `native`: https://192.168.201.237:8443/room/native/
-- Generated native ICE URL: `turns:192.168.201.237:8443?transport=tcp`.
+- Generated native ICE URL for the example hostname: `turns:debian-vm-2.lan:8443?transport=tcp`.
 
-No SSH tunnel, hosts-file edit, public DNS or extra host port is needed. The same **TCP 8443** serves the LAN-dev certificate download; other HTTP paths return **308** to HTTPS at the same authority. Owner/viewer traffic and native TURN remain HTTPS/TLS with certificate verification. The download alias exists only in explicit LAN-dev mode and exposes neither private keys nor credentials.
+No SSH tunnel, hosts-file edit or extra host port is needed; the chosen TURN hostname must resolve correctly on the client. The same **TCP 8443** serves the LAN-dev certificate download; other HTTP paths return **308** to HTTPS at the same authority. Owner/viewer traffic and native TURN remain HTTPS/TLS with certificate verification. The download alias exists only in explicit LAN-dev mode and exposes neither private keys nor credentials.
 
 **Non-browser HTTPS/WSS clients:** without SNI and HTTP ALPN, a connection reaches the default TURN branch, not HTTPS. Explicitly enable ALPN `http/1.1` (or `h2` plus `http/1.1` as modern browsers do), or use the original distinct-hostname/SNI setup; LAN-IP mode does not guarantee compatibility with every Agent/CDP client.
 
@@ -169,7 +174,7 @@ openssl s_client -connect 127.0.0.1:8443 -noservername \
   -verify_return_error </dev/null
 ```
 
-In LAN mode, use `-connect 192.168.201.237:8443` and replace `-verify_hostname turn.localhost` with `-verify_ip 192.168.201.237`.
+In LAN mode, use `-connect 192.168.201.237:8443` and replace `-verify_hostname turn.localhost` with `-verify_hostname "$TURN_FQDN"`. Use `-verify_ip 192.168.201.237` only for the optional legacy IP TURN mode.
 
 TLS verification alone does not establish TURN authentication/allocation or WebRTC success. Runtime acceptance should also check TURN rejects missing/bad credentials, allocations advertise the private IP, public peer permissions fail, private-room peer permissions succeed, TCP relay requests fail, and every room has empty host port bindings.
 
@@ -189,7 +194,7 @@ python3 -B -m unittest discover -s examples/single-port-relay -p 'test_*.py' -v
 python3 examples/single-port-relay/demo.py down --state-dir "$STATE"
 ```
 
-The stdlib tests use temporary private files, a fake Unix socket and mocked Docker network inspection; when Compose is installed they also parse the **actual Compose file** without starting services. They check one TCP publication, identical public URI ports, HTTP ALPN/legacy SNI/default TURN routing, explicit LAN flags, private upstreams, raw secret/path characters, native mode/image/payload, DNS/IP SAN validation, leaf-only renewal, certificate-only bootstrap, state permissions and idempotency. They do **not** claim container/media/browser acceptance or change/pull/build any runtime image.
+The stdlib tests use temporary private files, a fake Unix socket and mocked Docker network inspection; when Compose is installed they also parse the **actual Compose file** without starting services. They check one TCP publication, identical public URI ports, HTTP ALPN/legacy SNI/default TURN routing, explicit LAN/hostname flags, private upstreams, raw secret/path characters, native mode/image/payload, mixed DNS/IP SAN validation, leaf-only renewal, certificate-only bootstrap, state permissions and idempotency. They do **not** claim container/media/browser acceptance or change/pull/build any runtime image.
 
 `down` removes only this Compose project's services. Manager-created rooms are **not Compose services** and are not automatically deleted; storage, private state and the explicitly supplied external network are retained. Remove only your own now-unused bridge and browser CA trust when finished. Restarting Manager invalidates its existing in-memory Owner sessions and Agent keys.
 
