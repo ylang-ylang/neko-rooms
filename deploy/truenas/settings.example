@@ -1,0 +1,22 @@
+# Copy to /mnt/ylangsPool/appdata/neko/native-relay.settings and chmod 600.
+# Literal KEY=value, NOT shell/dotenv; no inline comments/quote stripping.
+# No Owner/viewer password keys: existing rooms.env/neko.env remain authoritative.
+# REQUIRED: choose an actual DNS name resolving from your clients to TN/ingress.
+# One name is enough; blank TURN_HOST inherits APP_HOST. Never assume nip/sslip DNS.
+APP_HOST=
+TURN_HOST=
+PUBLIC_PORT=28322
+PUBLIC_BIND_IP=192.168.202.11
+# REQUIRED: inspect the EXISTING neko-rooms-net; choose a genuinely unused IP.
+ROOM_NETWORK_CIDR=
+TURN_PRIVATE_IP=
+# Existing fullchain/key covering APP_HOST and TURN_HOST. Keep the key private.
+# Leave BOTH blank ONLY when explicitly configuring --dev-ca (client trust needed).
+TLS_CERT_FILE=
+TLS_KEY_FILE=
+# Normal redeploy follows public channels; existing rooms are NOT auto-recreated.
+# For rollback/version lock, replace BOTH with published immutable refs/digests.
+MANAGER_IMAGE=docker.io/ylangylang/neko-rooms:single-port
+ROOM_IMAGE=docker.io/ylangylang/neko-chromium-cdp:single-port
+# Explicit offline archive load: set never ONLY after all referenced images exist.
+RELEASE_PULL_POLICY=always
