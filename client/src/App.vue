@@ -17,7 +17,7 @@
 
       <span v-if="auth.authenticated && auth.username" class="ml-4">{{ auth.username }}</span>
       <form v-if="auth.mode === 'form'" :action="auth.logout_url" method="post" class="ml-4">
-        <v-btn type="submit" text>退出登录</v-btn>
+        <v-btn type="submit" text>Sign out</v-btn>
       </form>
     </v-app-bar>
 

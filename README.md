@@ -1,5 +1,7 @@
 # neko-rooms
 
+Project UI, API errors, code comments and documentation are written in English.
+
 <p align="center">
   <img src="https://img.shields.io/github/v/release/m1k1o/neko-rooms" alt="release">
   <img src="https://img.shields.io/github/license/m1k1o/neko-rooms" alt="license">
@@ -41,7 +43,7 @@ Open `/manage/` and sign in with the **same** `NEKO_ROOMS_ADMIN_USERNAME` / `NEK
 
 **Startup compatibility:** A partial username/password pair now fails startup instead of silently opening management. Configure both (the default username is `admin`) or intentionally neither.
 
-The host-only, HttpOnly, SameSite=Lax owner cookie lasts **7 days**; sessions live only in manager RAM. **Restarting the manager requires signing in again.** Use **退出登录** in the header to revoke the session; expired/revoked sessions return to the login page. HTTPS (or HTTPS forwarded by an explicitly trusted `NEKO_ROOMS_PROXY=true` proxy) adds the Secure cookie flag. `GET /manage/auth/status` returns `{mode, authenticated, username?, login_url, logout_url}` without exposing credentials or session tokens.
+The host-only, HttpOnly, SameSite=Lax owner cookie lasts **7 days**; sessions live only in manager RAM. **Restarting the manager requires signing in again.** Use **Sign out** in the header to revoke the session; expired/revoked sessions return to the login page. HTTPS (or HTTPS forwarded by an explicitly trusted `NEKO_ROOMS_PROXY=true` proxy) adds the Secure cookie flag. `GET /manage/auth/status` returns `{mode, authenticated, username?, login_url, logout_url}` without exposing credentials or session tokens.
 
 Programmatic owner API clients must first POST the form and retain its cookie, not use an Agent Bearer key. Login, logout and all mutating owner API requests require an `Origin` (or `Referer`) matching the manager's scheme, host **and port**. For example, with `OWNER_USERNAME` and `OWNER_PASSWORD` set to the existing credentials:
 
@@ -90,7 +92,7 @@ This is shared-browser control, not a sandbox: use existing contexts/pages, do n
 
 ### Room presets
 
-New-room defaults use Neko API v3, 1920×1080 at 30 fps, 2 GiB shared memory and developer tools enabled. Separate private **Profile** (`/home/neko/profile`) and **Downloads** (`/home/neko/Downloads`) mounts preserve their data when configured with [storage](./docs/storage.md). Toggling persistent browser data affects only the Profile mount, not Downloads. Existing rooms are not migrated automatically; use compatible images and storage settings.
+New-room defaults use Neko API v3, 1920×1080 at 30 fps, 2 GiB shared memory and developer tools enabled. **Browser profiles are durable named resources**, independent of deployment names: select an available profile or create a new one in **Add room**, and manage them through **Profiles**. Quick room automatically creates a durable profile. Deployment removal retains the complete browser profile and Downloads; only explicit, unbound Profile deletion removes data. Clone forks an independent profile using its existing one-name form. Existing managed directories are adopted in place without restarting browsers. See [storage and profile recovery](./docs/storage.md).
 
 ## One-entry HTTP/WebSocket desktop (NAS mode)
 

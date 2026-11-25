@@ -57,7 +57,7 @@ export function agentErrorMessage(error: unknown): string {
       if (typeof body.message === 'string') detail = body.message
       else if (typeof body.error === 'string') detail = body.error
     }
-    return `HTTP ${error.response.status}${detail ? `：${detail}` : ''}`
+    return `HTTP ${error.response.status}${detail ? `: ${detail}` : ''}`
   }
-  return error instanceof Error ? error.message : '网络请求失败，请重试。'
+  return error instanceof Error ? error.message : 'Network request failed. Please retry.'
 }

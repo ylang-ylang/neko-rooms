@@ -35,6 +35,7 @@
         </v-tooltip>
       </v-col>
       <v-col class="text-right">
+        <Profiles class="mr-3" />
         <RoomsQuick class="mr-3" />
         <v-dialog v-model="dialog" persistent max-width="600px">
           <template v-slot:activator="{ on, attrs }">
@@ -68,6 +69,7 @@ import RoomsList from '@/components/RoomsList.vue'
 import RoomsQuick from '@/components/RoomsQuick.vue'
 import RoomsCreate from '@/components/RoomsCreate.vue'
 import Pull from '@/components/Pull.vue'
+import Profiles from '@/components/Profiles.vue'
 import { RoomEntry } from '@/api/index'
 
 @Component({
@@ -76,6 +78,7 @@ import { RoomEntry } from '@/api/index'
     RoomsQuick,
     RoomsCreate,
     Pull,
+    Profiles,
   }
 })
 export default class Home extends Vue {

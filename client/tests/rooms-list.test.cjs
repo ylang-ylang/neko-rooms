@@ -90,7 +90,7 @@ test('all five actions preserve room IDs and running, stopped and paused availab
     assert.deepEqual(plain(controls.slice(0, 4).map(node => node.componentOptions.propsData)),
       ['start', 'stop', 'pause', 'restart'].map((action, index) => ({ action, roomId: item.id, disabled: disabled[index] })))
     const clone = controls[4].data.scopedSlots.activator({ on: {}, attrs: {} })[0]
-    assert.equal(clone.data.attrs['aria-label'], '复制房间 ' + item.name)
+    assert.equal(clone.data.attrs['aria-label'], 'Clone deployment ' + item.name)
     clone.data.on.click()
     assert.equal(instance.cloneSource, item)
     assert.equal(instance.cloneName, item.name + '-copy')
@@ -151,7 +151,7 @@ test('clone dialog contains only the new name and native Enter submit, with auto
   const nodes = descendants(dialog)
   const fields = nodes.filter(node => node.tag === 'v-text-field')
   assert.equal(fields.length, 1)
-  assert.equal(fields[0].data.attrs.label, '新房间名称')
+  assert.equal(fields[0].data.attrs.label, 'New deployment name')
   assert.equal(fields[0].data.attrs.autofocus, '')
   assert.equal(fields[0].data.attrs.autocomplete, 'off')
   let selected = 0
@@ -159,8 +159,8 @@ test('clone dialog contains only the new name and native Enter submit, with auto
   assert.equal(selected, 1)
   assert.equal(nodes.filter(node => node.tag === 'v-form').length, 1)
   assert.equal(typeof nodes.find(node => node.tag === 'v-form').data.on.submit, 'function')
-  assert.equal(nodes.find(node => node.tag === 'v-btn' && text(node) === '复制并启动').data.attrs.type, 'submit')
-  assert.doesNotMatch(text(dialog), /password|密码|User password|Neko image|临时 Key/)
+  assert.equal(nodes.find(node => node.tag === 'v-btn' && text(node) === 'Clone and start').data.attrs.type, 'submit')
+  assert.doesNotMatch(text(dialog), /password|User password|Neko image|Temporary key/)
   instance.$destroy()
 })
 
@@ -221,7 +221,7 @@ test('pending clone blocks repeat submit, Cancel, Escape, backdrop and switching
   assert.equal(instance.cloneLoading, false)
   assert.equal(instance.cloneSource, null)
   assert.deepEqual(plain(calls), [['ROOMS_CLONE', { roomId: rooms[0].id, name: 'new-room' }], ['ROOMS_LOAD']])
-  assert.match(instance.cloneSuccess, /new-room.*已创建并启动/)
+  assert.match(instance.cloneSuccess, /new-room.*created and started/)
   assert.equal(instance.cloneError, '')
   instance.$destroy()
 })
@@ -253,7 +253,7 @@ test('409 including empty bodies stays inline, preserves exact name and never si
     assert.equal(instance.cloneName, 'existing-name')
     assert.equal(instance.cloneSource, rooms[0])
     assert.equal(instance.cloneLoading, false)
-    assert.match(instance.cloneError, /名称.*已存在.*HTTP 409/)
+    assert.match(instance.cloneError, /name already exists.*HTTP 409/)
     assert.equal(calls.length, 1)
     assert.equal(instance.cloneSuccess, '')
     const error = descendants(cloneDialog(instance)).find(node => node.tag === 'v-alert')
@@ -270,7 +270,7 @@ test('server and network failures stay inline; lost response is not described as
   for (const [error, expected] of [
     [{ isAxiosError: true, response: { status: 400, data: { message: 'unmanaged writable mount' } } }, /HTTP 400.*unmanaged writable mount/],
     [{ isAxiosError: true, response: { status: 500, data: '' } }, /HTTP 500/],
-    [new Error('Network Error'), /结果尚未确认.*刷新房间列表/],
+    [new Error('Network Error'), /outcome is unconfirmed.*Refresh the deployment list/],
   ]) {
     const instance = list(true, async () => { throw error })
     prepareClone(instance)
@@ -295,8 +295,8 @@ test('refresh failure after creation keeps committed success, without offering a
   assert.equal(instance.cloneSource, null)
   assert.equal(instance.cloneLoading, false)
   assert.equal(instance.cloneError, '')
-  assert.match(instance.cloneSuccess, /已创建并启动/)
-  assert.match(instance.cloneRefreshError, /已创建.*刷新失败.*不要重复复制/)
+  assert.match(instance.cloneSuccess, /created and started/)
+  assert.match(instance.cloneRefreshError, /created.*refresh failed.*do not clone again/)
   await instance.Clone()
   assert.equal(calls.length, 2)
   instance.$destroy()

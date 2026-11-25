@@ -3,6 +3,7 @@ import Vuex, { ActionContext } from 'vuex'
 
 import {
   Configuration,
+  BrowserProfile,
   RoomsConfig,
   ConfigApi,
   RoomEntry,
@@ -30,6 +31,7 @@ const defaultApi = new DefaultApi(configuration)
 export default new Vuex.Store({
   state,
   mutations: {
+    PROFILES_SET(state: State, profiles: BrowserProfile[]) { Vue.set(state, 'profiles', profiles) },
     ROOMS_CONFIG_SET(state: State, roomsConfig: RoomsConfig) {
       Vue.set(state, 'roomsConfig', roomsConfig)
     },
@@ -78,6 +80,16 @@ export default new Vuex.Store({
     },
   },
   actions: {
+    async PROFILES_LOAD({ commit }: ActionContext<State, State>) {
+      const res = await roomsApi.profilesList()
+      commit('PROFILES_SET', res.data)
+    },
+    async PROFILES_CREATE(_: ActionContext<State, State>, name: string) {
+      return (await roomsApi.profileCreate({ name })).data
+    },
+    async PROFILES_DELETE(_: ActionContext<State, State>, id: string) {
+      await roomsApi.profileDelete(id)
+    },
     async ROOMS_CONFIG({ commit }: ActionContext<State, State>) {
       const res = await configApi.roomsConfig()
       commit('ROOMS_CONFIG_SET', res.data);

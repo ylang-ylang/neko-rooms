@@ -20,7 +20,7 @@ async function bootstrap() {
     const app = document.getElementById('app')
     if (app) {
       app.setAttribute('role', 'alert')
-      app.textContent = '无法读取管理登录状态，管理界面未启动。请刷新页面重试。' +
+      app.textContent = 'Could not read Manager authentication status. The management UI did not start. Refresh the page to retry.' +
         (error instanceof Error ? ' ' + error.message : '')
     }
     return

@@ -29,6 +29,15 @@
           </v-col>
         </v-row>
 
+        <template v-if="storageEnabled">
+          <v-select v-model="data.profile_id" :items="profileOptions" label="Browser profile"
+            hint="Exclusive binding lasts until deployment removal, even while stopped. Removing a deployment keeps its profile and Downloads."
+            persistent-hint :disabled="profilesLoading" />
+          <v-text-field v-if="!data.profile_id" v-model="data.profile_name" label="New profile name (optional)"
+            maxlength="120" hint="Defaults to the deployment name. A durable profile is always created." persistent-hint />
+          <v-alert v-if="profilesError" type="error" dense outlined>{{ profilesError }}</v-alert>
+        </template>
+
         <v-row align="center">
           <v-col>
             <v-text-field
@@ -295,7 +304,7 @@
             </v-alert>
             <p>
               <span :style="{ opacity: !storageEnabled ? 0.25 : 1 }">
-                <strong>Private</strong>: Host path is relative to <code class="mx-1">&lt;storage path&gt;/rooms/&lt;room name&gt;/</code>. <br />
+                <strong>Private</strong>: Host path is relative to <code class="mx-1">&lt;selected profile storage root&gt;/</code>. <br />
                 <strong>Template</strong>: Host path is relative to <code class="mx-1">&lt;storage path&gt;/templates/</code>, and will be readonly. <br />
               </span>
               <strong>Protected</strong>: Host path must be whitelisted in config and exists on the host, will be readonly. <br />
@@ -494,13 +503,7 @@
               ></v-checkbox>
             </v-col>
             <v-col>
-              <v-checkbox
-                v-model="browserPolicyContent.persistent_data"
-                label="Allow persistent data"
-                hide-details
-                class="shrink ml-2 mt-0"
-                :disabled="!browserPolicyEnabled"
-              ></v-checkbox>
+              <p>Browser data is retained in the selected durable profile.</p>
             </v-col>
           </v-row>
         </template>
@@ -544,13 +547,14 @@
 </template>
 
 <script lang="ts">
-import { Vue, Component, Ref, Watch } from 'vue-property-decorator'
+import { Vue, Component, Ref } from 'vue-property-decorator'
 import { AxiosError } from 'axios'
 import { randomPassword } from '@/utils/random'
 import { roomNameRules } from '@/utils/room-name'
 
 import {
   RoomSettings,
+  BrowserProfile,
   BrowserPolicyContent,
   BrowserPolicyExtension,
   BrowserPolicyTypeEnum,
@@ -568,6 +572,8 @@ export type VForm = Vue & {
 export default class RoomsCreate extends Vue {
   @Ref('form') readonly _form!: VForm
 
+  public profilesLoading = false
+  public profilesError = ''
   public valid = true
   public roomNameRules = roomNameRules
 
@@ -681,18 +687,14 @@ export default class RoomsCreate extends Vue {
     })
   }
 
-  @Watch('browserPolicyContent.persistent_data')
-  onPersistentDataUpdate(enabled: boolean) {
-    const config = this.browserPolicyConfig
-    if (!config) return
-
-    if (enabled && !(this.data.mounts || []).some(({ container_path }) => container_path === config.profile)) {
-      // eslint-disable-next-line
-      this.data.mounts = [ ...(this.data.mounts || []), { type: RoomMountTypeEnum.private, host_path: '/profile', container_path: config.profile }]
-    } else if (!enabled) {
-      // eslint-disable-next-line
-      this.data.mounts = (this.data.mounts || []).filter(({ type, container_path }) => !(type === RoomMountTypeEnum.private && container_path === config.profile))
-    }
+  get profileOptions() {
+    return [
+      { text: 'Create a new durable profile', value: '' },
+      ...this.$store.state.profiles.map((profile: BrowserProfile) => ({
+        text: `${profile.name} (${profile.id})${profile.room_id ? ' — bound to ' + profile.room_name : ''}`,
+        value: profile.id, disabled: !!profile.room_id,
+      })),
+    ]
   }
 
   addEnv() {
@@ -814,8 +816,13 @@ export default class RoomsCreate extends Vue {
     this.$emit('finished', true)
   }
 
-  mounted() {
+  async mounted() {
     this.Clear()
+    if (!this.storageEnabled) return
+    this.profilesLoading = true
+    try { await this.$store.dispatch('PROFILES_LOAD') }
+    catch { this.profilesError = 'Could not load profiles. Close and reopen this dialog to retry.' }
+    finally { this.profilesLoading = false }
   }
 }
 </script>

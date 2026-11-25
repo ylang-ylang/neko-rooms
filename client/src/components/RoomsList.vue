@@ -21,7 +21,7 @@
         </v-tooltip>
       </template>
       <template v-slot:[`item.name`]="{ item }">
-        <div class="room-name">{{ item.name }}</div>
+        <div class="room-name">{{ item.name }}<div v-if="item.profile_id" class="text-caption" :title="item.profile_id">Profile: {{ item.profile_name }}</div></div>
       </template>
       <template v-slot:[`item.neko_image`]="{ item }">
         <div class="room-image d-flex align-center">
@@ -55,10 +55,10 @@
           <v-tooltip bottom open-delay="300">
             <template v-slot:activator="{ on, attrs }">
               <v-btn v-bind="attrs" v-on="on" icon color="primary" :disabled="!item.id || !item.name"
-                :aria-label="'复制房间 ' + item.name"
+                :aria-label="'Clone deployment ' + item.name"
                 @click="OpenClone(item)"><v-icon>mdi-content-copy</v-icon></v-btn>
             </template>
-            <span>复制房间</span>
+            <span>Clone deployment</span>
           </v-tooltip>
         </div>
       </template>
@@ -77,20 +77,20 @@
     <v-dialog :value="!!cloneSource" :persistent="cloneLoading" max-width="480px"
       aria-labelledby="room-clone-title" @input="onCloneDialogInput">
       <v-card v-if="cloneSource" :aria-busy="cloneLoading">
-        <v-card-title id="room-clone-title" class="headline">复制房间</v-card-title>
+        <v-card-title id="room-clone-title" class="headline">Clone deployment</v-card-title>
         <v-form ref="cloneForm" @submit.prevent="Clone">
           <v-card-text>
-            <p class="text-break">源房间：{{ cloneSource.name }}</p>
-            <p>复制配置和持久化浏览器数据，并自动启动新房间。</p>
-            <v-text-field v-model="cloneName" label="新房间名称" :rules="cloneNameRules"
+            <p class="text-break">Source deployment: {{ cloneSource.name }}</p>
+            <p>Fork an independent durable profile, copy deployment settings and start the new deployment.</p>
+            <v-text-field v-model="cloneName" label="New deployment name" :rules="cloneNameRules"
               :disabled="cloneLoading" autofocus autocomplete="off" @focus="selectCloneName" @input="cloneError = ''" />
             <v-alert v-if="cloneError" type="error" outlined dense role="alert">{{ cloneError }}</v-alert>
-            <v-progress-linear v-if="cloneLoading" indeterminate aria-label="正在复制并启动房间" />
+            <v-progress-linear v-if="cloneLoading" indeterminate aria-label="Cloning and starting deployment" />
           </v-card-text>
           <v-card-actions>
             <v-spacer />
-            <v-btn text :disabled="cloneLoading" @click="CloseClone">取消</v-btn>
-            <v-btn type="submit" color="primary" :loading="cloneLoading" :disabled="cloneLoading">复制并启动</v-btn>
+            <v-btn text :disabled="cloneLoading" @click="CloseClone">Cancel</v-btn>
+            <v-btn type="submit" color="primary" :loading="cloneLoading" :disabled="cloneLoading">Clone and start</v-btn>
           </v-card-actions>
         </v-form>
       </v-card>
@@ -145,7 +145,7 @@ export default class RoomsList extends Vue {
   public cloneSuccess = ''
   public cloneRefreshError = ''
   public cloneNameRules = [
-    (value: string) => !!value || '请输入新房间名称。',
+    (value: string) => !!value || 'Enter a new deployment name.',
     ...roomNameRules,
   ]
 
@@ -184,24 +184,24 @@ export default class RoomsList extends Vue {
     this.cloneError = ''
     try {
       await this.$store.dispatch('ROOMS_CLONE', { roomId, name })
-      this.cloneSuccess = `房间「${name}」已创建并启动，可在列表查看就绪状态。`
+      this.cloneSuccess = `Deployment "${name}" was created and started. Check its readiness in the list.`
       this.cloneSource = null
       this.cloneName = ''
       try {
         await this.$store.dispatch('ROOMS_LOAD')
       } catch {
         // Creation has committed. A refresh failure must never invite another clone POST.
-        this.cloneRefreshError = '房间已创建，但列表刷新失败。请手动刷新列表，不要重复复制。'
+        this.cloneRefreshError = 'Deployment created, but list refresh failed. Refresh the list manually; do not clone again.'
       }
     } catch (error) {
       if (axios.isAxiosError(error) && error.response) {
         const { status, data } = error.response
         const detail = typeof data === 'string' ? data.trim() :
           (typeof data?.message === 'string' ? data.message : typeof data?.error === 'string' ? data.error : '')
-        this.cloneError = status === 409 ? '此名称的房间或数据已存在，请使用其他名称。（HTTP 409）' :
-          `复制失败（HTTP ${status}）${detail ? '：' + detail : '，请重试。'}`
+        this.cloneError = status === 409 ? 'A deployment with this name already exists. Choose another name. (HTTP 409)' :
+          `Clone failed (HTTP ${status})${detail ? ': ' + detail : '. Please retry.'}`
       } else {
-        this.cloneError = '网络请求失败，复制结果尚未确认。请先刷新房间列表，再决定是否重试。'
+        this.cloneError = 'Network request failed; clone outcome is unconfirmed. Refresh the deployment list before retrying.'
       }
     } finally {
       this.cloneLoading = false

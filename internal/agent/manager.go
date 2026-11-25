@@ -211,26 +211,26 @@ func firstHeader(value string) string {
 }
 
 func agentPrompt(cdpURL, token string, expires time.Time) string {
-	return fmt.Sprintf(`请通过 CDP 连接这个 Neko 房间正在显示的同一个 Chromium，不要启动浏览器。
-CDP URL：%s
-临时认证请求头：Authorization: Bearer %s
-到期时间：%s（UTC）；密钥到期、被撤销或管理器重启后连接会被断开。
+	return fmt.Sprintf(`Connect through CDP to the same Chromium currently displayed in this Neko room. Do not launch a browser.
+CDP URL: %s
+Temporary authentication header: Authorization: Bearer %s
+Expires: %s (UTC). Connections close when the key expires, is revoked, or Manager restarts.
 
-Node.js（Playwright）：
+Node.js (Playwright):
 const browser = await chromium.connectOverCDP(%q, { headers: { Authorization: %q } });
 const context = browser.contexts()[0];
 console.log(context.pages().map((page, index) => ({ index, url: page.url() })));
 
-Python（Playwright 异步 API）：
+Python (Playwright async API):
 browser = await playwright.chromium.connect_over_cdp(%q, headers={"Authorization": %q})
 context = browser.contexts[0]
 print([{"index": i, "url": page.url} for i, page in enumerate(context.pages)])
 
-HTTP discovery（如 /json/version、/json/list）和 WebSocket 握手都必须使用上面相同的 Authorization 请求头；不要把密钥放进 URL/query，也不要用网页全局 extraHTTPHeaders / extra_http_headers 代替 CDP 连接认证。
-只复用现有的默认 context 和已有 pages；禁止 launch、newContext / new_context，禁止创建新的浏览器或独立上下文。连接后先列出当前标签页，报告给我，然后等待我的任务，不要自行操作。
-收到“暂停”时停止操作并回复“已暂停”，等待我明确说“继续”后先回复“继续”再恢复；没有“继续”指令不得自行恢复。
-禁止发送原始 CDP Browser.close，禁止关闭共享 context 或共享 pages；不要使用会关闭共享浏览器的清理逻辑。任务完成后停止操作并等待我撤销临时密钥。
-不需要也不要索取 Neko 登录密码、管理后台凭据或长期 Basic 凭据；只使用本次临时 Bearer 密钥。`,
+HTTP discovery (including /json/version and /json/list) and the WebSocket handshake must use the same Authorization header above. Never put the key in URL/query parameters or substitute page-global extraHTTPHeaders / extra_http_headers for CDP connection authentication.
+Reuse only the existing default context and existing pages. Do not launch, call newContext / new_context, or create another browser or isolated context. First list the current tabs and report them, then wait for my task. Do not act independently.
+When I say "pause", stop and reply "paused". Wait until I explicitly say "resume", reply "resuming", then continue. Never resume without that instruction.
+Never send raw CDP Browser.close or close the shared context or pages. Do not use cleanup that closes the shared browser. When finished, stop and wait for me to revoke the temporary key.
+Do not request Neko login passwords, Manager credentials, or long-lived Basic credentials. Use only this temporary Bearer key.`,
 		cdpURL, token, expires.UTC().Format(time.RFC3339Nano),
 		cdpURL, "Bearer "+token, cdpURL, "Bearer "+token)
 }

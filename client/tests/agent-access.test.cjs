@@ -115,7 +115,7 @@ test('API errors retain HTTP details or the network error message', () => {
   }, '@/auth': { installManagerAuthInterceptor: () => undefined } })
   for (const data of ['room unavailable\n', { error: 'room unavailable' }, { message: 'room unavailable' }]) {
     assert.equal(api.agentErrorMessage({ isAxiosError: true, response: { status: 404, data } }),
-      'HTTP 404：room unavailable')
+      'HTTP 404: room unavailable')
   }
   assert.equal(api.agentErrorMessage({ isAxiosError: true, response: { status: 500, data: {} } }), 'HTTP 500')
   assert.equal(api.agentErrorMessage(new Error('Network Error')), 'Network Error')
@@ -274,11 +274,13 @@ test('ported room defaults keep Profile/Downloads independent across instances a
   assert.notEqual(first.data.mounts, second.data.mounts)
   assert.notEqual(first.data.resources, second.data.resources)
   assert.notEqual(first.browserPolicyContent.extensions, second.browserPolicyContent.extensions)
-  first.onPersistentDataUpdate(true)
-  assert.equal(first.data.mounts.length, 2) // Enabling persistence does not duplicate Profile.
-  first.onPersistentDataUpdate(false)
-  assert.deepEqual(plain(first.data.mounts), [
-    { type: 'private', host_path: '/downloads', container_path: '/home/neko/Downloads' },
+  assert.equal(first.data.mounts.length, 2)
+  assert.equal(first.data.profile_id, '')
+  state.profiles = [{ id: 'available', name: 'Retained identity' }, { id: 'bound', name: 'Busy identity', room_id: 'existing', room_name: 'Original' }]
+  assert.deepEqual(plain(first.profileOptions), [
+    { text: 'Create a new durable profile', value: '' },
+    { text: 'Retained identity (available)', value: 'available', disabled: false },
+    { text: 'Busy identity (bound) — bound to Original', value: 'bound', disabled: true },
   ])
   assert.equal(second.data.mounts.length, 2)
   first.$refs.form = { resetValidation: () => undefined }
@@ -300,8 +302,8 @@ test('Vue templates compile; Agent action uses room.name and lists no raw keys',
     } else if (file === 'AgentAccess.vue') {
       assert.match(template, /readonly rows="8"/)
       assert.doesNotMatch(template, /\{\{\s*key\.(key|prompt|cdp_url)\s*\}\}/)
-      assert.match(template, /Manager 重启会使所有临时 Key 失效/)
-      assert.match(template, /自动复制未成功/)
+      assert.match(template, /Restarting Manager invalidates all temporary keys/)
+      assert.match(template, /Automatic copy failed/)
     }
   }
 })

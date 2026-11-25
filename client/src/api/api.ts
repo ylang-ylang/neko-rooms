@@ -23,6 +23,22 @@ import type { RequestArgs } from './base';
 // @ts-ignore
 import { BASE_PATH, COLLECTION_FORMATS, BaseAPI, RequiredError, operationServerMap } from './base';
 
+export interface BrowserProfile {
+    /** Stable profile ID, independent of deployment names and container IDs. */
+    'id': string;
+    /** Human-readable profile name. */
+    'name': string;
+    /** created */
+    'created': string;
+    /** Bound deployment ID; absent when available. */
+    'room_id'?: string;
+    /** Bound deployment name; stopped deployments still reserve the profile. */
+    'room_name'?: string;
+}
+export interface ProfileCreateRequest {
+    /** name */
+    'name': string;
+}
 /**
  * 
  * @export
@@ -219,7 +235,7 @@ export interface PullStatus {
  */
 export interface RoomCloneRequest {
     /**
-     * Unique new room name; existing rooms or storage are never replaced.
+     * Unique new deployment name. Forks a new independent durable profile; retained profiles with the same name are not replaced.
      * @type {string}
      * @memberof RoomCloneRequest
      */
@@ -309,6 +325,10 @@ export interface RoomEntry {
      * @memberof RoomEntry
      */
     'labels'?: { [key: string]: string; };
+    /** Durable profile binding. On creation choose an available profile, or omit to create a new durable profile automatically. */
+    'profile_id'?: string;
+    /** Profile display name; on creation names a new profile when profile_id is omitted. Defaults to the deployment name. */
+    'profile_name'?: string;
 }
 /**
  * 
@@ -575,6 +595,10 @@ export interface RoomSettings {
      * @memberof RoomSettings
      */
     'browser_policy'?: BrowserPolicy;
+    /** Durable profile binding. On creation choose an available profile, or omit to create a new durable profile automatically. */
+    'profile_id'?: string;
+    /** Profile display name; on creation names a new profile when profile_id is omitted. Defaults to the deployment name. */
+    'profile_name'?: string;
 }
 /**
  * 
@@ -1547,6 +1571,106 @@ export const RoomsApiAxiosParamCreator = function (configuration?: Configuration
             };
         },
         /**
+         *
+         * @summary List persistent browser profiles
+         * @param {*} [options] Override http request option.
+         * @throws {RequiredError}
+         */
+        profilesList: async (options: RawAxiosRequestConfig = {}): Promise<RequestArgs> => {
+            const localVarPath = `/api/profiles`;
+            // use dummy base URL string because the URL constructor only accepts absolute URLs.
+            const localVarUrlObj = new URL(localVarPath, DUMMY_BASE_URL);
+            let baseOptions;
+            if (configuration) {
+                baseOptions = configuration.baseOptions;
+            }
+
+            const localVarRequestOptions = { method: 'GET', ...baseOptions, ...options};
+            const localVarHeaderParameter = {} as any;
+            const localVarQueryParameter = {} as any;
+
+
+
+            setSearchParams(localVarUrlObj, localVarQueryParameter);
+            let headersFromBaseOptions = baseOptions && baseOptions.headers ? baseOptions.headers : {};
+            localVarRequestOptions.headers = {...localVarHeaderParameter, ...headersFromBaseOptions, ...options.headers};
+
+            return {
+                url: toPathString(localVarUrlObj),
+                options: localVarRequestOptions,
+            };
+        },
+        /**
+         *
+         * @summary Create a persistent browser profile
+         * @param {ProfileCreateRequest} profileCreateRequest
+         * @param {*} [options] Override http request option.
+         * @throws {RequiredError}
+         */
+        profileCreate: async (profileCreateRequest: ProfileCreateRequest, options: RawAxiosRequestConfig = {}): Promise<RequestArgs> => {
+            // verify required parameter 'profileCreateRequest' is not null or undefined
+            assertParamExists('profileCreate', 'profileCreateRequest', profileCreateRequest)
+            const localVarPath = `/api/profiles`;
+            // use dummy base URL string because the URL constructor only accepts absolute URLs.
+            const localVarUrlObj = new URL(localVarPath, DUMMY_BASE_URL);
+            let baseOptions;
+            if (configuration) {
+                baseOptions = configuration.baseOptions;
+            }
+
+            const localVarRequestOptions = { method: 'POST', ...baseOptions, ...options};
+            const localVarHeaderParameter = {} as any;
+            const localVarQueryParameter = {} as any;
+
+
+
+            localVarHeaderParameter['Content-Type'] = 'application/json';
+
+            setSearchParams(localVarUrlObj, localVarQueryParameter);
+            let headersFromBaseOptions = baseOptions && baseOptions.headers ? baseOptions.headers : {};
+            localVarRequestOptions.headers = {...localVarHeaderParameter, ...headersFromBaseOptions, ...options.headers};
+            localVarRequestOptions.data = serializeDataIfNeeded(profileCreateRequest, localVarRequestOptions, configuration)
+
+            return {
+                url: toPathString(localVarUrlObj),
+                options: localVarRequestOptions,
+            };
+        },
+        /**
+         *
+         * @summary Permanently delete an available profile and its data
+         * @param {string} profileId
+         * @param {*} [options] Override http request option.
+         * @throws {RequiredError}
+         */
+        profileDelete: async (profileId: string, options: RawAxiosRequestConfig = {}): Promise<RequestArgs> => {
+            // verify required parameter 'profileId' is not null or undefined
+            assertParamExists('profileDelete', 'profileId', profileId)
+            const localVarPath = `/api/profiles/{profileId}`
+                .replace(`{${"profileId"}}`, encodeURIComponent(String(profileId)));
+            // use dummy base URL string because the URL constructor only accepts absolute URLs.
+            const localVarUrlObj = new URL(localVarPath, DUMMY_BASE_URL);
+            let baseOptions;
+            if (configuration) {
+                baseOptions = configuration.baseOptions;
+            }
+
+            const localVarRequestOptions = { method: 'DELETE', ...baseOptions, ...options};
+            const localVarHeaderParameter = {} as any;
+            const localVarQueryParameter = {} as any;
+
+
+
+            setSearchParams(localVarUrlObj, localVarQueryParameter);
+            let headersFromBaseOptions = baseOptions && baseOptions.headers ? baseOptions.headers : {};
+            localVarRequestOptions.headers = {...localVarHeaderParameter, ...headersFromBaseOptions, ...options.headers};
+
+            return {
+                url: toPathString(localVarUrlObj),
+                options: localVarRequestOptions,
+            };
+        },
+        /**
          * 
          * @summary List all rooms
          * @param {{ [key: string]: string; }} [labels] 
@@ -1766,6 +1890,44 @@ export const RoomsApiFp = function(configuration?: Configuration) {
             return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
         },
         /**
+         *
+         * @summary List persistent browser profiles
+         * @param {*} [options] Override http request option.
+         * @throws {RequiredError}
+         */
+        async profilesList(options?: RawAxiosRequestConfig): Promise<(axios?: AxiosInstance, basePath?: string) => AxiosPromise<Array<BrowserProfile>>> {
+            const localVarAxiosArgs = await localVarAxiosParamCreator.profilesList(options);
+            const localVarOperationServerIndex = configuration?.serverIndex ?? 0;
+            const localVarOperationServerBasePath = operationServerMap['RoomsApi.profilesList']?.[localVarOperationServerIndex]?.url;
+            return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
+        },
+        /**
+         *
+         * @summary Create a persistent browser profile
+         * @param {ProfileCreateRequest} profileCreateRequest
+         * @param {*} [options] Override http request option.
+         * @throws {RequiredError}
+         */
+        async profileCreate(profileCreateRequest: ProfileCreateRequest, options?: RawAxiosRequestConfig): Promise<(axios?: AxiosInstance, basePath?: string) => AxiosPromise<BrowserProfile>> {
+            const localVarAxiosArgs = await localVarAxiosParamCreator.profileCreate(profileCreateRequest, options);
+            const localVarOperationServerIndex = configuration?.serverIndex ?? 0;
+            const localVarOperationServerBasePath = operationServerMap['RoomsApi.profileCreate']?.[localVarOperationServerIndex]?.url;
+            return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
+        },
+        /**
+         *
+         * @summary Permanently delete an available profile and its data
+         * @param {string} profileId
+         * @param {*} [options] Override http request option.
+         * @throws {RequiredError}
+         */
+        async profileDelete(profileId: string, options?: RawAxiosRequestConfig): Promise<(axios?: AxiosInstance, basePath?: string) => AxiosPromise<void>> {
+            const localVarAxiosArgs = await localVarAxiosParamCreator.profileDelete(profileId, options);
+            const localVarOperationServerIndex = configuration?.serverIndex ?? 0;
+            const localVarOperationServerBasePath = operationServerMap['RoomsApi.profileDelete']?.[localVarOperationServerIndex]?.url;
+            return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
+        },
+        /**
          * 
          * @summary List all rooms
          * @param {{ [key: string]: string; }} [labels] 
@@ -1920,6 +2082,35 @@ export const RoomsApiFactory = function (configuration?: Configuration, basePath
          */
         roomStop(roomId: string, options?: RawAxiosRequestConfig): AxiosPromise<void> {
             return localVarFp.roomStop(roomId, options).then((request) => request(axios, basePath));
+        },
+        /**
+         *
+         * @summary List persistent browser profiles
+         * @param {*} [options] Override http request option.
+         * @throws {RequiredError}
+         */
+        profilesList(options?: RawAxiosRequestConfig): AxiosPromise<Array<BrowserProfile>> {
+            return localVarFp.profilesList(options).then((request) => request(axios, basePath));
+        },
+        /**
+         *
+         * @summary Create a persistent browser profile
+         * @param {ProfileCreateRequest} profileCreateRequest
+         * @param {*} [options] Override http request option.
+         * @throws {RequiredError}
+         */
+        profileCreate(profileCreateRequest: ProfileCreateRequest, options?: RawAxiosRequestConfig): AxiosPromise<BrowserProfile> {
+            return localVarFp.profileCreate(profileCreateRequest, options).then((request) => request(axios, basePath));
+        },
+        /**
+         *
+         * @summary Permanently delete an available profile and its data
+         * @param {string} profileId
+         * @param {*} [options] Override http request option.
+         * @throws {RequiredError}
+         */
+        profileDelete(profileId: string, options?: RawAxiosRequestConfig): AxiosPromise<void> {
+            return localVarFp.profileDelete(profileId, options).then((request) => request(axios, basePath));
         },
         /**
          * 
@@ -2099,6 +2290,38 @@ export class RoomsApi extends BaseAPI {
         return RoomsApiFp(this.configuration).roomStop(roomId, options).then((request) => request(this.axios, this.basePath));
     }
 
+    /**
+     *
+     * @summary List persistent browser profiles
+     * @param {*} [options] Override http request option.
+     * @throws {RequiredError}
+     * @memberof RoomsApi
+     */
+    public profilesList(options?: RawAxiosRequestConfig) {
+        return RoomsApiFp(this.configuration).profilesList(options).then((request) => request(this.axios, this.basePath));
+    }
+    /**
+     *
+     * @summary Create a persistent browser profile
+     * @param {ProfileCreateRequest} profileCreateRequest
+     * @param {*} [options] Override http request option.
+     * @throws {RequiredError}
+     * @memberof RoomsApi
+     */
+    public profileCreate(profileCreateRequest: ProfileCreateRequest, options?: RawAxiosRequestConfig) {
+        return RoomsApiFp(this.configuration).profileCreate(profileCreateRequest, options).then((request) => request(this.axios, this.basePath));
+    }
+    /**
+     *
+     * @summary Permanently delete an available profile and its data
+     * @param {string} profileId
+     * @param {*} [options] Override http request option.
+     * @throws {RequiredError}
+     * @memberof RoomsApi
+     */
+    public profileDelete(profileId: string, options?: RawAxiosRequestConfig) {
+        return RoomsApiFp(this.configuration).profileDelete(profileId, options).then((request) => request(this.axios, this.basePath));
+    }
     /**
      * 
      * @summary List all rooms

@@ -1,5 +1,6 @@
 import {
   RoomsConfig,
+  BrowserProfile,
   RoomEntry,
   RoomSettings,
   BrowserPolicyContent,
@@ -29,10 +30,15 @@ export const state = {
 
   roomsConfig: {} as RoomsConfig,
   rooms: [] as RoomEntry[],
+  profiles: [] as BrowserProfile[],
   defaultRoomSettings: {
     // Agent-room preset: independent persistent Profile and Downloads mounts.
     api_version: 3,
     name: '',
+    // eslint-disable-next-line
+    profile_id: '',
+    // eslint-disable-next-line
+    profile_name: '',
     // eslint-disable-next-line
     neko_image: '',
     // eslint-disable-next-line

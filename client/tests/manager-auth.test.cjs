@@ -254,7 +254,7 @@ test('HTML, malformed status and unsafe server auth URLs fail explicitly instead
     { ...valid, login_url: '//other.test/auth/login' }, { ...valid, logout_url: '/auth/logout' },
   ]) {
     const h = harness('/manage/', { status })
-    await assert.rejects(h.auth.initializeManagerAuth(), /管理登录状态响应无效/)
+    await assert.rejects(h.auth.initializeManagerAuth(), /Invalid Manager authentication status response/)
     assert.deepEqual(h.redirects, [])
     assert.equal(h.requests.length, 1)
   }
@@ -270,7 +270,7 @@ test('status network/HTTP/HTML failures are visible, do not mount Vue, and do no
     await settle()
     assert.equal(ui.mounts.length, 0)
     assert.equal(ui.app.attributes.role, 'alert')
-    assert.match(ui.app.textContent, /无法读取管理登录状态.*请刷新页面重试/)
+    assert.match(ui.app.textContent, /Could not read Manager authentication status.*Refresh the page to retry/)
     assert.equal(h.requests.length, 1)
     assert.deepEqual(h.redirects, [])
   }
@@ -300,9 +300,9 @@ test('rendered logout is a native POST form only in form mode, using the server 
         assert.equal(forms[0].data.on, undefined) // No submit interception/JS auth protocol.
         const button = descendants(forms[0]).find(node => node.tag === 'v-btn')
         assert.equal(button.data.attrs.type, 'submit')
-        assert.ok(descendants(button).some(node => node.text === '退出登录'))
+        assert.ok(descendants(button).some(node => node.text === 'Sign out'))
       } else {
-        assert.ok(!nodes.some(node => node.text === '退出登录'))
+        assert.ok(!nodes.some(node => node.text === 'Sign out'))
       }
       instance.$destroy()
     }

@@ -97,6 +97,7 @@
         <template v-slot:default>
           <tbody>
             <tr><th style="width:50%;"> Name </th><td>{{ settings.name }}</td></tr>
+            <tr v-if="settings.profile_id"><th> Browser profile </th><td class="text-break">{{ settings.profile_name }} ({{ settings.profile_id }})<div>Retained after deployment removal.</div></td></tr>
             <tr><th> Neko image </th><td>{{ settings.neko_image }}</td></tr>
             <tr><th> User password </th><td>
               <RoomLink :roomId="roomId" :password="settings.user_pass" label="invite link for users" />

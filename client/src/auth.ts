@@ -40,7 +40,7 @@ function parseAuthStatus(data: unknown): ManagerAuthStatus {
       (status.username !== undefined && typeof status.username !== 'string') ||
       status.login_url !== managerPath + '/auth/login' ||
       status.logout_url !== managerPath + '/auth/logout') {
-    throw new Error('管理登录状态响应无效。')
+    throw new Error('Invalid Manager authentication status response.')
   }
   return {
     mode: status.mode as ManagerAuthStatus['mode'],

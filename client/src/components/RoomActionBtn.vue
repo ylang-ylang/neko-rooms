@@ -82,7 +82,7 @@ export default class RoomActionBtn extends Vue {
     if (this.action === 'remove') {
       const { value } = await this.$swal({
         title: "Remove room",
-        text: "Do you really want to remove this room?",
+        text: "Remove this deployment? Its persistent profile and Downloads will remain available in Profiles.",
         icon: 'warning',
         showCancelButton: true,
         confirmButtonText: "Yes",
@@ -93,7 +93,7 @@ export default class RoomActionBtn extends Vue {
     } else if (this.action === 'recreate') {
       const { value } = await this.$swal({
         title: "Recreate room",
-        text: "Do you really want to recreate this room? It will delete all your non-persistent data.",
+        text: "Recreate this deployment using the same durable profile? Container-only data will be lost.",
         icon: 'warning',
         showCancelButton: true,
         confirmButtonText: "Yes",

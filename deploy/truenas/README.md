@@ -1,76 +1,82 @@
-# TrueNAS：发布与原生单 TCP 入口
+# TrueNAS: publishing and the native single-TCP endpoint
 
-## 日常发布：一条命令，保留现网拓扑
+## Routine release: one command, existing topology
 
-本目录属于 **neko-rooms 源码仓库**；独立的 **truenas-apps** 仓库只接收根目录 App YAML，不放脚本、模板、测试或源码。本目录不保存第二份 `neko.compose.yaml`。
+This directory belongs to the **neko-rooms source repository**. The independent **truenas-apps** repository accepts root App YAML only, not scripts, templates, tests or source code. This directory does not keep another `neko.compose.yaml`.
 
-从 **neko-rooms 仓库根目录**执行：
+Run from the **neko-rooms repository root**:
 
 ```sh
 bash deploy/truenas/publish-to-tn.sh
 ```
 
-它薄调用本源码仓库现成的 `python3 scripts/release.py publish`（增量构建/缓存/按组件发布），传递 `release.json`，再通过既有 SSH key 调用 TN 的 `update.py --release ...`。TN 只升级当前 App 的 Manager image，Browser 镜像仅预拉备用；不改当前网络/端口/env/卷/镜像 allowlist，不 stop/recreate 持久房。没有重复媒体、CDP、clone 或认证回归。原配置私备，官方 `app.update` 失败则由同一 API 恢复。
+This thin wrapper invokes the existing `python3 scripts/release.py publish` incremental/cached, component-aware publisher, transfers `release.json`, and uses the existing SSH key to invoke TN's `update.py --release ...`. TN upgrades only the current App's Manager image; the Browser image is pre-pulled for later use. Current networking, ports, environment, volumes and image allowlist remain unchanged. Persistent rooms are not stopped or recreated. There is no additional media, CDP, clone or authentication regression matrix. The original configuration is backed up privately; if official `app.update` fails, the same API restores it.
 
-本次已交付的 Manager 为下文 `97ffae9` digest。**当前 TN 仍保持原 direct 拓扑，入口 `http://192.168.202.11:28322/manage/`，Owner 使用原 `rooms.env`。** 首次单口拓扑迁移与日常镜像更新分开：NAS 实际只有 `.202.11`，不能将解析到另一主机 `.201.11` 的 `truenas.lan` 用来切换。本页后续单口配置待有正确指向 `.202.11` 的 DNS 名再执行，不是每次发布步骤。
+**TN currently retains its original direct topology at `http://192.168.202.11:28322/manage/`, using Owner credentials from the existing `rooms.env`.** Initial single-port migration is separate from routine image updates. The authorized NAS is `.202.11`; `truenas.lan` resolves to a different host at `.201.11` and must not be used for this migration. The single-port instructions below require a real DNS name pointing to the authorized endpoint; they are not routine release steps.
 
-仅更新已发布 Manager（在 TN 本机）：`sudo -n python3 /home/truenas_admin/neko-native-release/update.py --manager-image docker.io/ylangylang/neko-rooms:single-port`。
+To apply an already published Manager on TN itself:
 
-## 首次原生单口部署（需正确 DNS）
+```sh
+sudo -n python3 /home/truenas_admin/neko-native-release/update.py --manager-image docker.io/ylangylang/neko-rooms:single-port
+```
 
-唯一部署清单源仍是独立 **truenas-apps 仓库根 [`neko.compose.yaml`](https://github.com/ylang-ylang/truenas-apps/blob/main/neko.compose.yaml)**，不是另建 App，也不迁到 `neko/` 子目录。实现直接取自 `neko-rooms@97ffae9ed0acffd698a112f00d0167112441f795` 的 `examples/single-port-relay/`；三个代理模板原样保留。原生 Neko 3.2 UI、核心和 Chromium 不替换为 aggregate/MSE 页面。
+Durable browser profiles live under the existing Manager storage mount. Upgrades register legacy managed directories in place without restarting browsers. Deployment removal retains the profile and Downloads; select that profile when creating a replacement. The separate **Profiles** action permanently deletes available profiles only. See [storage ownership and recovery](../../docs/storage.md).
 
-- **28322/tcp** 从旧 Manager HTTP 入口升级为同端口 **HTTPS/WSS + TURN/TLS + Agent CDP**。Nginx 保留 HTTP ALPN/SNI 快路径，无 SNI/ALPN 时由 HAProxy 在 TLS 解密后区分 HTTP/STUN；普通 Playwright 不需特殊传输参数。
-- Manager、HAProxy、coturn、所有新建 relay 房间不发布额外 HostPort；TURN UDP 分配池只在现有 `neko-rooms-net` 内。普通 HTTP 反代无法代替这个入口。
-- 旧默认房 `28320/28321`、`52100-52110/udp`、`profile/`、`downloads/`、`config/`、认证文件原位保留。不要将这些旧端口当新公网入口。
-- `rooms-data/rooms/NAME/{profile,downloads}` 不迁移；旧测试数据也不删除。房间名字是存储身份，容器 ID 可变。
+## Initial native single-port deployment (correct DNS required)
 
-## 1. 准备一次，TN 直接拉镜像
+The sole manifest source remains the independent **truenas-apps repository's root [`neko.compose.yaml`](https://github.com/ylang-ylang/truenas-apps/blob/main/neko.compose.yaml)**. Do not create another App or move it into a `neko/` subdirectory. The implementation comes from `examples/single-port-relay/`; its three proxy templates are preserved. Native Neko 3.2 UI, core and Chromium are not replaced with aggregate/MSE pages.
 
-在 TN 上分别准备 `neko-rooms` 与 `truenas-apps` 两个独立 checkout，以下命令从 **neko-rooms 根目录**执行。Python 3、OpenSSL 和 TN 自带 Compose **2.32.3** 足够；不需安装 Python 包或本地构建镜像。默认读取相邻 `../truenas-apps/neko.compose.yaml`；不相邻时显式设置清单路径，不能把脚本复制回清单仓库。
+- **28322/tcp** upgrades the old Manager HTTP endpoint to same-port **HTTPS/WSS + TURN/TLS + Agent CDP**. Nginx retains the HTTP ALPN/SNI fast path; without SNI/ALPN, HAProxy distinguishes HTTP/STUN after TLS termination. Ordinary Playwright requires no special transport parameters.
+- Manager, HAProxy, coturn and new relay rooms publish no additional HostPorts. TURN UDP allocations remain inside the existing `neko-rooms-net`. An ordinary HTTP reverse proxy cannot replace this endpoint.
+- The old default room's `28320/28321`, `52100-52110/udp`, `profile/`, `downloads/`, `config/` and authentication files remain in place. These old ports are not the new public endpoint.
+- Legacy `rooms-data/rooms/NAME/{profile,downloads}` directories are registered as durable profile roots in place. New profiles use independent IDs, not deployment names. Old test data is not deleted automatically.
+
+## 1. Prepare once; TN pulls images directly
+
+Keep separate `neko-rooms` and `truenas-apps` checkouts on TN. Run these commands from the **neko-rooms root**. Python 3, OpenSSL and TN's bundled Compose **2.32.3** suffice; no Python packages or local image builds are required. The default manifest path is adjacent `../truenas-apps/neko.compose.yaml`. Supply an explicit path when the checkouts are not adjacent; do not copy scripts into the manifest repository.
 
 ```sh
 app=/mnt/ylangsPool/appdata/neko
-manifest=../truenas-apps/neko.compose.yaml  # 不相邻时改为实际绝对路径
+manifest=../truenas-apps/neko.compose.yaml  # Use an absolute path if not adjacent.
 test -f "$manifest"
 test -e "$app/native-relay.settings" || install -m 600 deploy/truenas/settings.example "$app/native-relay.settings"
 docker network inspect neko-rooms-net --format '{{json .IPAM.Config}}'
 ```
 
-在私有 `native-relay.settings` 填写：
+Fill in the private `native-relay.settings`:
 
-1. `APP_HOST`：客户端实际能解析、到达此 TN/入口的 DNS 名。`TURN_HOST` 留空即可共用同一 FQDN；Firefox TURN/TLS 拒绝 IP 字面量。不要默认 nip/sslip 可解析，也不要自动改 hosts。
-2. `PUBLIC_BIND_IP`：默认沿用已授权 NAS 地址 `192.168.202.11`；若明确要多个接口监听，可显式改为 `0.0.0.0`。DNS 可以指向 NAS 另一真实接口或已授权 TCP 转发入口，**不要求 DNS IP 字面上等于绑定 IP，也不因此假定它们同机**。目前工作站 `truenas.lan`/`truenas` 解析到 `192.168.201.11`，尚无同机证据，不能拿它冒充已验证的 `.202.11`。
-3. `PUBLIC_PORT=28322` 默认不换旧外部端口；HTTPS 和 `turns:` 必须用这同一个端口。若以后 WAN 转发，需用户授权后配置原始 TCP/L4 透传到该端口，不能经仅 HTTPS 的反代/CDN。
-4. `ROOM_NETWORK_CIDR`：上面实际 bridge 子网；`TURN_PRIVATE_IP`：其中明确未占用的静态地址，不能是 gateway。脚本只检查该现有网络，不创建/重置网络。
-5. 已有公信证书：填写 NAS 上实际 `TLS_CERT_FILE` fullchain 和 `TLS_KEY_FILE`，证书须覆盖两个配置名；密钥权限 0600。脚本不覆盖它们。
+1. `APP_HOST`: a DNS name clients actually resolve and reach at this TN/ingress. Leave `TURN_HOST` blank to reuse that FQDN; Firefox TURN/TLS rejects IP literals. Do not assume nip/sslip DNS works or modify hosts automatically.
+2. `PUBLIC_BIND_IP`: defaults to the authorized NAS address `192.168.202.11`. Explicitly use `0.0.0.0` only when multiple listening interfaces are intended. DNS may point to another real NAS interface or an authorized TCP forwarder. **Its address need not literally match the bind IP, and this does not prove two addresses belong to one machine.** Workstation `truenas.lan`/`truenas` currently resolves to `192.168.201.11`; it is not the verified `.202.11` NAS.
+3. `PUBLIC_PORT=28322`: retains the existing external port. HTTPS and `turns:` must use this same port. Any later WAN exposure requires authorized raw TCP/L4 forwarding, not an HTTPS-only proxy/CDN.
+4. `ROOM_NETWORK_CIDR`: the inspected bridge subnet. `TURN_PRIVATE_IP`: a specifically unused static address inside it, never the gateway. The script inspects the existing network and does not create/reset it.
+5. Existing trusted certificate: set the actual NAS `TLS_CERT_FILE` fullchain and `TLS_KEY_FILE`. The certificate must cover both configured names; keep the key mode 0600. The script does not overwrite them.
 
-已有证书执行：
+With an existing certificate:
 
 ```sh
 python3 deploy/truenas/configure.py --compose-template "$manifest" --settings "$app/native-relay.settings" --public
 ```
 
-**仅 LAN 私有 CA 模式**：保持 TLS 两字段空白，显式加 `--dev-ca`。仍需客户端可解析的真实 DNS 名。脚本生成/复用 `native-relay/tls/`，不导入信任、不改 DNS，也不替换已存在的 CA/key。客户端需明确导入 `native-relay/public/ca.crt`；它是唯一可经同端口 `/ca.crt` 下载的公共证书，不包含私钥。叶证书有效 30 天，到期/更换 DNS 时在原命令显式加 `--renew-server-cert`，只换叶证书，保留 CA、keys、TURN 凭证。
+**LAN-only private CA mode:** leave both TLS fields blank and explicitly add `--dev-ca`. A real client-resolvable DNS name is still required. The script creates/reuses `native-relay/tls/`, without importing trust, changing DNS or replacing an existing CA/key. Clients must explicitly trust `native-relay/public/ca.crt`; it is the only public certificate downloadable at same-port `/ca.crt` and contains no private key. Leaf certificates last 30 days. To renew or change DNS, explicitly add `--renew-server-cert` to the same command; only the leaf certificate changes, retaining CA, keys and TURN credentials.
 
-脚本产出 **`/mnt/ylangsPool/appdata/neko/native-relay/neko.compose.yaml`**。将其全文粘贴到现有 TN **neko** App 的 YAML 编辑器并由操作者保存更新。**不要直接粘贴尚含 `${...}` 的仓库源文件**；TN 编辑器不会读取 checkout 的 `.env`。生成 YAML 保留扁平布局、只引用 NAS 绝对路径，不依赖本机 cache；原 `rooms.env/neko.env` 仍由 TN Compose 按原 dotenv 语义加载，TURN 的 `relay.env` 用 Compose 2.30+ 支持的 `format: raw`。输出不展开永久密码，也不启动/停止任何服务。
+The script generates **`/mnt/ylangsPool/appdata/neko/native-relay/neko.compose.yaml`**. Paste its complete contents into the existing TN **neko** App's YAML editor and save the update. **Do not paste repository source still containing `${...}`**: the TN editor does not read the checkout's `.env`. Generated YAML retains the flat layout and NAS absolute paths, without local cache dependencies. Original `rooms.env/neko.env` retain Compose dotenv semantics; TURN's `relay.env` uses Compose 2.30+ `format: raw`. Generation does not expand permanent passwords or start/stop services.
 
-根 YAML 的无网络 `room-image` 一次性服务只执行 `/bin/true`，先拉取与 Manager allowlist **完全相同**的房间镜像，不运行浏览器、不挂数据。Manager 在它成功后启动。新原生栈无需额外手动 build/load，不需要把镜像搬到本地标签。旧默认 `neko/cdp-proxy` 保留原镜像及 `pull_policy: never`，继续使用该既有 App 的已加载镜像，不借升级重做默认房。
+The root YAML's networkless one-shot `room-image` service runs only `/bin/true`, pulling the **exact** image in Manager's allowlist. It runs no browser and mounts no data; Manager starts after it succeeds. The native stack needs no manual build/load or local retagging. Legacy default `neko/cdp-proxy` retains its existing image and `pull_policy: never`; upgrading does not recreate the default room.
 
-## 2. 旧房必须显式迁移，不是换 Manager 就结束
+## 2. Migrate old room networking explicitly
 
-旧 `http/direct` 房间的实际网络标签、容器、端口不会因 YAML 更新自动变化；`http` 房仍会走旧自定义聚合器，直接点默认 Recreate 还可能因旧镜像不在新 allowlist 被拒绝。
+Updating Manager/YAML does not change old `http/direct` containers, network labels or ports. An `http` room still uses its old custom aggregator; default Recreate may reject an old image absent from the new allowlist.
 
-先通过新 `https://APP_HOST:28322/manage/` 用**原 `rooms.env` Owner 用户名/密码**登录；Manager 重启后旧 session/临时 Agent key 失效，重新登录/签发即可。**不要批量删除旧房，不要修改默认 TN-owned neko 服务。**
+Sign in at the new `https://APP_HOST:28322/manage/` with the **original `rooms.env` Owner credentials**. Manager restart invalidates old sessions and temporary Agent keys; sign in/issue keys again. **Do not bulk-delete rooms or modify the default TN-owned neko service.**
 
-每次只选一个要迁移的房间：
+Migrate one explicitly selected room at a time:
 
-1. 暂停并确认 Agent 没有在途 CDP 操作；停止该房以落盘，备份其 `rooms-data/rooms/NAME/`（包括 SQLite WAL）。暂停房先解除 pause 再正常停止；不要直接复制仍在写入的 profile。保留其运行/暂停状态供迁移后手动恢复。
-2. 保留 `GET /manage/api/rooms/ID/settings` 的私有备份：含该房密码，不能贴进 issue/日志。确认 profile/downloads 的实际挂载仍为 `/profile`→`/home/neko/profile`、`/downloads`→`/home/neko/Downloads`，不要把整个 `/etc/neko` 或自定义 `neko.yaml` 覆盖 Manager 的原生 Neko-3 bridge。
-3. 在**已登录 Owner 的同源浏览器控制台**执行下面的显式请求；只填写所选 NAME，新镜像默认与发布通道一致。若已在设置锁版本，`image` 也须填相同 `ROOM_IMAGE`。它只覆盖 API/image，其余名字、密码、挂载、资源、策略保持原 settings；`start=false` 避免自动开房。服务先验证再移除旧容器，但后续启动失败仍需用私有 settings 备份恢复，故先备份。
+1. Pause Agent activity and confirm no CDP operation is in flight. Stop the selected room gracefully and back up its actual profile root, including SQLite WAL. A paused container must be unpaused before normal stop; do not copy a profile while it is writing. Record its original running/paused state.
+2. Privately back up `GET /manage/api/rooms/ID/settings`: it contains room passwords and must not enter issues/logs. Confirm the actual profile/download mounts (`/profile` to `/home/neko/profile`, `/downloads` to `/home/neko/Downloads`). Do not mount over all of `/etc/neko` or replace Manager's native Neko-3 startup bridge with custom `neko.yaml`.
+3. Run this explicit request in the **signed-in Owner browser's same-origin console**, specifying only the chosen NAME. The image defaults to the public channel; if settings pin a version, use the same `ROOM_IMAGE`. It overrides only API/image, retaining name, profile ID, passwords, mounts, resources and policy. `start=false` prevents automatic startup. Settings are validated before removal; retain the private settings backup for recovery if later creation/startup fails.
 
 ```js
-const name = '填写所选原房名';
+const name = 'SELECTED-EXISTING-ROOM-NAME';
 const image = 'docker.io/ylangylang/neko-chromium-cdp:single-port';
 const room = await fetch(`/manage/api/rooms/${encodeURIComponent(name)}/by-name`).then(r => {
   if (!r.ok) throw new Error(`lookup ${r.status}`); return r.json();
@@ -80,42 +86,35 @@ const result = await fetch(`/manage/api/rooms/${room.id}/recreate?start=false`, 
   body: JSON.stringify({api_version: 3, neko_image: image})
 });
 if (!result.ok) throw new Error(`recreate ${result.status}`);
-console.log('所选房已重建；请在 Owner 页手动启动并验收');
+console.log('Selected deployment recreated. Start it from the Owner UI and verify it.');
 ```
 
-4. 从 Owner 页启动该房；`/room/NAME/` 必须显示原生 Neko UI，用**原房间密码**登录，检查音视频/输入/剪贴板和原 cookies/downloads。Docker 检查该房 `HostConfig.PortBindings` 为空，网络模式标签为 `relay`。按需恢复暂停状态，其余旧房不动。
+4. Start that room from the Owner UI. `/room/NAME/` must show native Neko UI. Sign in with the **original room password** and check media/input/clipboard and retained cookies/downloads. Its Docker `HostConfig.PortBindings` must be empty and network-mode label `relay`. Restore pause state if needed; leave other rooms unchanged.
 
-新建房也用 API **3** 和 allowlist 里的新镜像、上述 Profile/Downloads 私有挂载。Neko 3.2 的 Viper 忽略空 env，故必须保留 Manager 原有 native-YAML startup bridge 来禁用公网 IP 探测；本方案不是只把 `NAT1TO1` 清空。Owner 的 Clone 只填新名字，使用其现有独立复制实现。
+New rooms also use API **3**, an allowlisted image and managed Profile/Downloads mounts. Neko 3.2's Viper ignores empty environment values: retain Manager's native-YAML startup bridge to disable public IP discovery, rather than merely clearing `NAT1TO1`. Owner Clone accepts one new name, forks an independent durable profile and starts the new deployment.
 
-Agent 从 Owner 页生成临时 room-bound Bearer key，用同一 HTTPS 端口 `/rooms/NAME/` 的 discovery/WSS。Owner cookie、原生房密码都不是 CDP key。连接现有浏览器/context/tabs；切回人控前暂停 Agent，Neko 控制锁不阻止 CDP，不要发 `Browser.close`。
+Issue temporary room-bound Agent Bearer keys from the Owner UI. Discovery/WSS uses same-port `/rooms/NAME/`. Owner cookies and native room passwords are not CDP keys. Attach to the existing browser/context/tabs; pause the Agent before returning to manual control. Neko's control lock does not block CDP. Never send `Browser.close`.
 
-## 3. 通道升级、版本锁和验证
+## 3. Channels, version pinning and diagnostics
 
-默认 `MANAGER_IMAGE=docker.io/ylangylang/neko-rooms:single-port`、`ROOM_IMAGE=docker.io/ylangylang/neko-chromium-cdp:single-port`，`RELEASE_PULL_POLICY=always`。以后发布更新通道，**操作者在 TN 选择更新/重新部署**即可拉取；CI 不登录 NAS，不自动重启 App，也不自动重建持久房。
+Defaults are `MANAGER_IMAGE=docker.io/ylangylang/neko-rooms:single-port`, `ROOM_IMAGE=docker.io/ylangylang/neko-chromium-cdp:single-port`, and `RELEASE_PULL_POLICY=always`. The routine command above publishes and updates the authorized TN App through official `app.update`. CI alone publishes images; it does not log into the NAS or automatically recreate persistent rooms.
 
-需要锁版本/回滚：在原 `native-relay.settings` 改这两个 image 为发布摘要的 immutable tag 或 `repo@sha256:...`，重跑同一 configure，再更新原 App YAML。已有房要换 image 仍须逐房显式 recreate；仅切 tag 不会更换正在运行的浏览器。离线存档仅在已加载全部所需镜像后显式设 `RELEASE_PULL_POLICY=never`，并将 image 指向真实已加载的对应版本；不要把未发布的 local tag 当公共镜像。
+For pinning/rollback, replace both image settings with the release summary's immutable tags or `repo@sha256:...`, rerun the same configure command, and update the existing App YAML. Existing browser images change only through explicit per-room recreation. For offline archives, explicitly use `RELEASE_PULL_POLICY=never` only after every required image is loaded, referencing the real loaded versions rather than unpublished local tags.
 
-本次两个 linux/amd64 镜像均已通过匿名 manifest/config 读取及实际按 digest pull，无需 TN registry 登录。可将下面两行直接替换设置里的通道值来锁定本次验收版本：
+The previously deployed baseline was Manager `single-port-97ffae9` at `sha256:c8c2f4d8aba0228ce33a28d4d0a0d692439a9550bec6c8f17cb3bc1da73db592` and Browser `3.2.0-1` at `sha256:96e413b7a82a0ec6043597151ce5f2183d34188aa81cc692af3365eafa1bd4e2`. Both linux/amd64 artifacts were anonymously pulled by digest. New releases emit their own immutable references; unchanged Browser content reuses `single-port-1e57c836bd3d`. The baseline Manager is not a claim about the latest channel after subsequent releases.
 
-```text
-MANAGER_IMAGE=docker.io/ylangylang/neko-rooms@sha256:c8c2f4d8aba0228ce33a28d4d0a0d692439a9550bec6c8f17cb3bc1da73db592
-ROOM_IMAGE=docker.io/ylangylang/neko-chromium-cdp@sha256:96e413b7a82a0ec6043597151ce5f2183d34188aa81cc692af3365eafa1bd4e2
-```
-
-相同版本的 immutable tags 分别为 `neko-rooms:single-port-97ffae9`、`neko-chromium-cdp:3.2.0-1`；两个默认 `:single-port` 通道在此次发布时也指向上述 digest。发布验收依据为镜像发布任务的匿名 pull 记录，不是根据标签存在推测成功。
-
-以上是镜像发布与 YAML 准备，不等于已有 NAS App 更新或 WAN 开通。DNS、证书信任和入口的实际可达性必须从使用客户端验证。部署后运行只读 probe（私有 CA 模式附加 `--dev-ca`）：
+Image publishing and YAML generation alone do not establish NAS/WAN reachability. For initial single-port setup, check DNS, certificate trust and reachability from the actual client. An optional read-only endpoint diagnostic (add `--dev-ca` for private CA mode):
 
 ```sh
 python3 deploy/truenas/configure.py --settings "$app/native-relay.settings" --check-endpoint
 ```
 
-它报告所选 DNS 的实际 IP，并验证同端口 TCP、两个名字的 TLS 信任/SAN/有效期和 Owner form 200/无 Basic challenge；不把 DNS 与某接口 IP 强行比较，也不证明两个接口属于同一 NAS。若从工作站检查，可带 `--app-dir` 指向本机持有的私有 CA 公共证书目录，配置与信任文件须私下传递。它不改文件、不登录、不做 TURN allocation，原生媒体/CDP 仍需上一节房间级验收。不在部署前以尚未监听的 TLS 新端口作为 render 前置。
+It reports the selected DNS address and checks same-port TCP, both names' TLS trust/SAN/expiry, and Owner form 200 without a Basic challenge. It neither forces DNS to equal a bind IP nor proves two interfaces belong to one NAS. On a workstation, `--app-dir` may point to the privately transferred public CA directory. The probe changes no files, performs no login or TURN allocation, and is not a pre-render requirement for a TLS port that is not listening yet.
 
-本地针对性测试（从 neko-rooms 根执行，仅临时目录，不 pull/build/start 容器）：
+Focused tooling tests from the source root use temporary directories, without pulling/building/starting containers:
 
 ```sh
 PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s deploy/truenas -p 'test_*.py' -v
-# 清单 checkout 不相邻时：TEST_COMPOSE_TEMPLATE=/path/to/truenas-apps/neko.compose.yaml。
-# 如有 NAS 同版独立二进制：TEST_COMPOSE_BINARY=/path/to/docker-compose-v2.32.3 加在上面命令前。
+# If the manifest checkout is not adjacent: TEST_COMPOSE_TEMPLATE=/path/to/truenas-apps/neko.compose.yaml.
+# Optional matching NAS Compose binary: prefix with TEST_COMPOSE_BINARY=/path/to/docker-compose-v2.32.3.
 ```

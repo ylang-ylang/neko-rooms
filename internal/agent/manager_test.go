@@ -277,7 +277,7 @@ func TestDiscoveryAndWebSocketUseExistingBrowser(t *testing.T) {
 	if !stored {
 		t.Fatal("registry did not store the key by its hash")
 	}
-	for _, text := range []string{key.CDPURL, "Bearer " + key.Key, key.ExpiresAt.Format(time.RFC3339Nano), "connectOverCDP", "connect_over_cdp", "browser.contexts()[0]", "browser.contexts[0]", "等待我的任务", "已暂停", "继续", "禁止发送原始 CDP Browser.close", "WebSocket 握手", "extraHTTPHeaders"} {
+	for _, text := range []string{key.CDPURL, "Bearer " + key.Key, key.ExpiresAt.Format(time.RFC3339Nano), "connectOverCDP", "connect_over_cdp", "browser.contexts()[0]", "browser.contexts[0]", "wait for my task", "paused", "resume", "Never send raw CDP Browser.close", "WebSocket handshake", "extraHTTPHeaders"} {
 		if !strings.Contains(key.Prompt, text) {
 			t.Errorf("Chinese prompt missing %q", text)
 		}
