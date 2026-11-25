@@ -50,6 +50,12 @@ and localStorage writes buffered in memory. Live cloning therefore also captures
   each frame's actual storage key. Site-isolated iframe targets are joined to
   page frame trees by parent frame ID, preserving their partition topology.
 
+Chromium can enumerate protected `chrome-extension:` UI as page targets while
+rejecting debugger attachment with `-32000 Not allowed`. Extension targets are
+outside this HTTP(S) supplement and are excluded before attachment; their
+persisted state remains in the full-profile copy. Required web, iframe and
+`about:blank` targets are still inspected, and their attach failures remain fatal.
+
 These supplemental values stay in backend memory, never API responses or logs.
 The target restores localStorage in disposable, inert same-origin documents
 served through CDP Fetch interception, without contacting the websites. Those
@@ -91,6 +97,17 @@ The opt-in Chromium test uses only new disposable local profiles and private tes
 origins. It checks fresh HttpOnly persistent/session cookies through actual HTTP
 account authentication, localStorage, partitioned iframe localStorage, IndexedDB,
 source/target write isolation and absence of website requests during restoration.
-It does not access Docker or existing rooms. Deployment acceptance additionally
-exercises the Owner API against an explicitly owned canary room and its actual
+It includes a separate existing CDP attachment and an additional `about:blank`
+tab, and does not access Docker or existing rooms. A separate read-only native
+regression can run against an explicitly owned diagnostic room:
+
+```sh
+NEKO_CLONE_TEST_NATIVE_CDP=owned-room-private-address:9223 \
+  go test -count=1 -v ./internal/room -run '^TestCloneNativeStorageCaptureWithExistingAttachment$'
+```
+
+This native check keeps an attachment to an existing HTTP(S) page open while
+production capture uses another connection. It creates, navigates and closes no
+source pages or contexts and logs no origins or values. Deployment acceptance
+additionally exercises the Owner API against an explicitly owned canary room and its actual
 image, persistent mounts and browser startup command.

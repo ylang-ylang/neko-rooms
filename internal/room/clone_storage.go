@@ -42,6 +42,7 @@ func (manager *RoomManagerCtx) snapshotLocalStorage(ctx context.Context, address
 		Infos []struct {
 			ID      string `json:"targetId"`
 			Type    string `json:"type"`
+			URL     string `json:"url"`
 			Context string `json:"browserContextId"`
 		} `json:"targetInfos"`
 	}
@@ -53,6 +54,14 @@ func (manager *RoomManagerCtx) snapshotLocalStorage(ctx context.Context, address
 	iframes := []*cloneFrame{}
 	for _, target := range targets.Infos {
 		if target.Type != "page" && target.Type != "iframe" {
+			continue
+		}
+		// Chromium exposes protected extension UI as page targets, but refuses
+		// debugger attachment to them (-32000 "Not allowed"). They are not
+		// HTTP(S) localStorage sources; their persisted extension state is part
+		// of the full profile snapshot. Exclude that explicit target scope,
+		// never an attach error: failures for web/about:blank frames still abort.
+		if targetURL, err := url.Parse(target.URL); err == nil && targetURL.Scheme == "chrome-extension" {
 			continue
 		}
 		incognito := false

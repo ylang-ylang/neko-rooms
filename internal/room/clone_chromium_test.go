@@ -72,6 +72,36 @@ func TestCloneChromiumFreshIdentity(t *testing.T) {
 	cloneTestNavigate(t, ctx, sourcePage, origin.URL+"/?seed")
 	cloneTestEvaluate(t, ctx, sourcePage, `window.partitionedReady`)
 	cloneTestEvaluate(t, ctx, sourcePage, `(async()=>{localStorage.setItem('clone-marker','source-account');await new Promise((resolve,reject)=>{const open=indexedDB.open('clone-fixture',1);open.onupgradeneeded=()=>open.result.createObjectStore('identity');open.onerror=()=>reject(open.error);open.onsuccess=()=>{const db=open.result;const tx=db.transaction('identity','readwrite');tx.objectStore('identity').put('source-account','account');tx.oncomplete=()=>{db.close();resolve()};tx.onerror=()=>reject(tx.error)}});return true})()`)
+	// Keep a separate browser-level client attached to the existing HTTP page,
+	// and retain an about:blank tab in this disposable local fixture. Capture
+	// must handle the mixture without excluding inherited/opaque blank frames.
+	observer, err := manager.connectBrowser(ctx, sourceAddress)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer observer.close()
+	var sourceTargets struct {
+		Infos []struct {
+			ID   string `json:"targetId"`
+			Type string `json:"type"`
+			URL  string `json:"url"`
+		} `json:"targetInfos"`
+	}
+	if err := observer.call(ctx, "Target.getTargets", nil, &sourceTargets); err != nil {
+		t.Fatal(err)
+	}
+	for _, target := range sourceTargets.Infos {
+		if target.Type == "page" && strings.HasPrefix(target.URL, origin.URL+"/") {
+			if err := observer.call(ctx, "Target.attachToTarget", map[string]any{"targetId": target.ID, "flatten": true}, nil); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	// This creates a tab only in our new local test browser, never in the
+	// separate optional real-native owned canary regression.
+	if err := observer.call(ctx, "Target.createTarget", map[string]any{"url": "about:blank", "background": true}, nil); err != nil {
+		t.Fatal(err)
+	}
 	if err := sourcePage.call(ctx, "Network.setCookies", map[string]any{"cookies": []any{
 		map[string]any{"name": "fresh-persistent", "value": "source-account", "url": origin.URL, "httpOnly": true, "sameSite": "Lax", "expires": float64(time.Now().Add(time.Hour).Unix())},
 		map[string]any{"name": "fresh-session", "value": "source-account", "url": origin.URL, "httpOnly": true, "sameSite": "Lax"},
