@@ -58,17 +58,20 @@ again in a separate CI build; PRs compile it without publishing.
 
 ## One-command manual fallback
 
-With Python 3.9+, Git/tar, Go compatible with `go.mod`, Node 20/npm, Docker/buildx
-and an existing authorized Docker Hub login:
+With Python 3.9+, Git/tar, Docker/buildx and an existing authorized Docker Hub login
+(no host Go, Node or npm is required; images compile Go and the UI inside Docker):
 
 ```sh
 python3 scripts/release.py publish --dry-run  # offline plan, no side effects
-python3 scripts/release.py publish           # checks → build/reuse → push; release.json
+python3 scripts/release.py publish           # probe → build/reuse missing → push; release.json
 ```
 
-This automatically archives the selected commit, runs unit checks in parallel,
-and builds missing images in parallel with a persistent `neko-release`
-docker-container builder (created if absent, without changing the default).
+This automatically archives the selected commit and builds missing images in parallel
+with a persistent `neko-release` docker-container builder (created if absent, without
+changing the default). It runs no Go/frontend/adapter component checks: CI already
+gates channel promotion on them, and the separate `check` subcommand still runs each
+component on demand.
+
 Dirty/untracked files cannot enter an image. `--source <commit>` and `--namespace`
 select explicit alternatives. No credentials are copied and no Pi tools are used.
 Do not run manual publication simultaneously with Actions on another host.

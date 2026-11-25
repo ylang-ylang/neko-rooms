@@ -244,24 +244,26 @@ class PlanTests(unittest.TestCase):
             run.assert_not_called()
         self.assertTrue(json.loads((self.root / "release.json").read_text())["dry_run"])
 
-    def test_manual_failed_checks_never_build_or_promote(self):
+    def test_manual_publish_runs_no_local_component_checks(self):
+        # CI (build.yml) gates the Go/frontend/adapter checks; the manual
+        # publisher never needs host Go, Node or npm, only Git/tar and Docker.
         plan = self.plan()
-        with patch.object(release, "remote_digest", return_value=None), \
-                patch.object(release, "snapshot") as snapshot, \
-                patch.object(release.subprocess, "run"), \
-                patch.object(release, "check", side_effect=RuntimeError("check failed")), \
+        with patch.object(release, "remote_digest", return_value="sha256:" + "a" * 64), \
+                patch.object(release.subprocess, "run") as run, \
                 patch.object(release, "build_image") as build, patch.object(release, "promote") as promote:
-            snapshot.return_value.__enter__.return_value = self.root
-            with self.assertRaisesRegex(RuntimeError, "check failed"):
-                release.publish(self.root, plan, self.publish_args())
+            release.publish(self.root, plan, self.publish_args())
             build.assert_not_called()
-            promote.assert_not_called()
+            promote.assert_called_once()
+        for call in run.call_args_list:
+            command = call.args[0]
+            self.assertNotIn(command[0], ("go", "npm", "node"))
+            self.assertNotIn("unittest", command)
 
     def test_manual_failed_image_build_never_promotes(self):
         plan = self.plan()
         with patch.object(release, "remote_digest", return_value=None), \
                 patch.object(release, "snapshot") as snapshot, patch.object(release.subprocess, "run"), \
-                patch.object(release, "check"), patch.object(release, "ensure_builder"), \
+                patch.object(release, "ensure_builder"), \
                 patch.object(release, "build_image", side_effect=RuntimeError("build failed")), \
                 patch.object(release, "promote") as promote:
             snapshot.return_value.__enter__.return_value = self.root
@@ -274,7 +276,7 @@ class PlanTests(unittest.TestCase):
         browser_tag = plan["images"][1]["tag"]
         with patch.object(release, "remote_digest", side_effect=lambda tag: "sha256:" + "b" * 64 if tag == browser_tag else None), \
                 patch.object(release, "snapshot") as snapshot, patch.object(release.subprocess, "run"), \
-                patch.object(release, "check"), patch.object(release, "ensure_builder"), \
+                patch.object(release, "ensure_builder"), \
                 patch.object(release, "build_image") as build, patch.object(release, "promote"):
             snapshot.return_value.__enter__.return_value = self.root
             release.publish(self.root, plan, self.publish_args())

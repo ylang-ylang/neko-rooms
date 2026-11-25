@@ -187,14 +187,14 @@ def build_command(plan, image, root, builder=None):
 
 
 def build_image(plan, image, root, builder):
-    # Check again after tests: immutable tags are reused, never overwritten by a rerun.
+    # Check again after the plan probe: immutable tags are reused, never overwritten by a rerun.
     if remote_digest(image["tag"]) is None:
         subprocess.run(build_command(plan, image, root, builder), check=True)
 
 
 @contextmanager
 def snapshot(root, commit):
-    """Manual publishing always tests/builds the exact Git commit, not a dirty checkout."""
+    """Manual publishing always builds the exact Git commit, not a dirty checkout."""
     with tempfile.TemporaryDirectory(prefix="neko-release-") as directory:
         directory = Path(directory)
         archive = directory / "source.tar"
@@ -268,19 +268,16 @@ def publish(root, plan, args):
     if args.dry_run:
         preview = dict(plan)
         preview["dry_run"] = True
-        preview["note"] = "No registry probes, checks, builds or channel writes. publish will probe and reuse immutable tags."
+        preview["note"] = "No registry probes, builds or channel writes. publish will probe and reuse immutable tags."
         preview["build_commands_if_missing"] = [build_command(plan, i, Path("<committed-source-snapshot>"), args.builder)
                                                  for i in plan["images"]]
         emit_plan(preview, args.output)
         return
-    probe_plan(plan)  # Fail fast on authentication/network errors, before costly checks/builds.
+    probe_plan(plan)  # Fail fast on authentication/network errors, before costly builds.
+    # CI (build.yml) runs the scripts/Go/frontend/adapter checks and gates channel
+    # promotion on them. The manual publisher only produces missing artifacts;
+    # Go and the UI compile inside Docker, so no host Go/Node/npm is required.
     with snapshot(root, plan["commit"]) as source:
-        subprocess.run([sys.executable, "-B", "-m", "unittest", "discover", "-s", "scripts", "-p", "test_*.py"],
-                       cwd=root, check=True)
-        with ThreadPoolExecutor(max_workers=3) as pool:
-            checks = [pool.submit(check, source, component) for component in ("go", "client", "adapter")]
-            for future in checks:
-                future.result()
         missing = [image for image in plan["images"] if image["build"]]
         if missing:
             ensure_builder(args.builder)
