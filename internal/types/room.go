@@ -211,6 +211,13 @@ type RoomEvent struct {
 }
 
 var ErrRoomNotFound = fmt.Errorf("room not found")
+var ErrRoomNameConflict = fmt.Errorf("room name or storage already exists")
+
+// RoomCloneRequest deliberately excludes settings and credentials: the manager
+// reads the authoritative source configuration, never a frontend round trip.
+type RoomCloneRequest struct {
+	Name string `json:"name"`
+}
 
 // ErrInvalidRoomSettings identifies rejected client settings, not Docker or
 // operator-configuration failures. HTTP handlers may map only this error to 400.
@@ -223,6 +230,7 @@ type RoomManager interface {
 
 	ValidateSettings(ctx context.Context, settings RoomSettings) error
 	Create(ctx context.Context, settings RoomSettings) (string, error)
+	Clone(ctx context.Context, id string, name string) (*RoomEntry, error)
 	GetEntry(ctx context.Context, id string) (*RoomEntry, error)
 	GetEntryByName(ctx context.Context, name string) (*RoomEntry, error)
 	GetSettings(ctx context.Context, id string) (*RoomSettings, error)

@@ -512,6 +512,52 @@ paths:
           description: Room not found
         '500':
           description: Internal server error
+  /api/rooms/{roomId}/clone:
+    post:
+      tags:
+        - rooms
+      summary: Clone a room and start the independent copy
+      description: |
+        Owner-only, same-origin mutation relative to the management prefix
+        (for example /manage/api/rooms/{roomId}/clone). Only the new name is
+        accepted. Preserves the source configuration and browser identity by
+        independently copying managed persistent storage; a running source is
+        briefly paused during its snapshot and always resumed. The source's
+        original running, paused, or stopped state is retained. Unmanaged
+        writable mounts are rejected rather than shared. Agent keys and Owner
+        sessions are not copied. Returns after the new room has been started.
+      operationId: roomClone
+      parameters:
+        - in: path
+          name: roomId
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RoomCloneRequest'
+      responses:
+        '201':
+          description: Independent clone created and started
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RoomEntry'
+        '400':
+          description: Invalid request or source configuration cannot be cloned independently
+        '401':
+          description: Owner authentication required
+        '403':
+          description: Cross-origin request or Agent credentials are not permitted
+        '404':
+          description: Source room not found
+        '409':
+          description: Target room name or persistent storage already exists
+        '500':
+          description: Clone failed; partial target resources are rolled back
   /api/rooms/{roomId}/settings:
     get:
       tags:
@@ -957,6 +1003,17 @@ components:
             type: string
             example: /dev/dri/renderD128
 
+    RoomCloneRequest:
+      type: object
+      required:
+        - name
+      additionalProperties: false
+      properties:
+        name:
+          type: string
+          minLength: 2
+          pattern: '^[a-zA-Z0-9][a-zA-Z0-9_.-]+$'
+          description: Unique new room name; existing rooms or storage are never replaced.
     RoomSettings:
       type: object
       properties:

@@ -46,6 +46,8 @@ type fakeDocker struct {
 	imageCmd        []string
 	imageEnv        []string
 	imageWorkingDir string
+	failAction      string
+	onAction        func(string)
 }
 
 func newNetworkManager(t *testing.T, cfg *config.Room) (*RoomManagerCtx, *fakeDocker) {
@@ -109,6 +111,44 @@ func (f *fakeDocker) serveHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 		w.WriteHeader(http.StatusCreated)
 		json.NewEncoder(w).Encode(dockerContainer.CreateResponse{ID: id})
+	case strings.HasPrefix(path, "/containers/") && (r.Method == "POST" || r.Method == "DELETE"):
+		parts := strings.Split(strings.TrimPrefix(path, "/containers/"), "/")
+		action := "remove"
+		if len(parts) == 2 {
+			action = parts[1]
+		}
+		if f.onAction != nil {
+			f.onAction(action)
+		}
+		if f.failAction == action {
+			http.Error(w, `{"message":"injected failure"}`, 500)
+			return
+		}
+		for fullID, c := range f.containers {
+			if !strings.HasPrefix(fullID, parts[0]) {
+				continue
+			}
+			state := *c.State
+			switch action {
+			case "pause":
+				state.Paused, state.Status = true, "paused"
+			case "unpause":
+				state.Paused, state.Status = false, "running"
+			case "start", "restart":
+				state.Running, state.Status = true, "running"
+			case "stop":
+				state.Running, state.Paused, state.Status = false, false, "exited"
+			case "remove":
+				delete(f.containers, fullID)
+			}
+			if action != "remove" {
+				c.State = &state
+				f.containers[fullID] = c
+			}
+			w.WriteHeader(http.StatusNoContent)
+			return
+		}
+		http.Error(w, `{"message":"not found"}`, 404)
 	case r.Method == "GET" && strings.HasPrefix(path, "/containers/") && strings.HasSuffix(path, "/json"):
 		id := strings.TrimSuffix(strings.TrimPrefix(path, "/containers/"), "/json")
 		for fullID, c := range f.containers {

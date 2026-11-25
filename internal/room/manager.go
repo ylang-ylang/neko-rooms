@@ -6,6 +6,7 @@ import (
 	"encoding/csv"
 	"encoding/json"
 	"fmt"
+	"net"
 	"net/url"
 	"os"
 	"path"
@@ -13,6 +14,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/docker/cli/opts"
@@ -58,6 +60,11 @@ type RoomManagerCtx struct {
 	config *config.Room
 	client *dockerClient.Client
 	events *events
+
+	// Serializes lifecycle mutations, name/port allocation and clone snapshots.
+	// Read-only listing and viewer/CDP traffic remain independent.
+	lifecycle sync.Mutex
+	cdpDial   func(context.Context, string, string) (net.Conn, error)
 }
 
 func (manager *RoomManagerCtx) Config() types.RoomsConfig {
@@ -332,6 +339,12 @@ func (manager *RoomManagerCtx) prepareSettings(ctx context.Context, settings typ
 }
 
 func (manager *RoomManagerCtx) Create(ctx context.Context, settings types.RoomSettings) (string, error) {
+	manager.lifecycle.Lock()
+	defer manager.lifecycle.Unlock()
+	return manager.create(ctx, settings, "")
+}
+
+func (manager *RoomManagerCtx) create(ctx context.Context, settings types.RoomSettings, cloneOperation string) (string, error) {
 	settings, image, err := manager.prepareSettings(ctx, settings)
 	if err != nil {
 		return "", err
@@ -419,6 +432,10 @@ func (manager *RoomManagerCtx) Create(ctx context.Context, settings types.RoomSe
 		BrowserPolicy: browserPolicyLabels,
 		UserDefined:   settings.Labels,
 	})
+
+	if cloneOperation != "" {
+		labels[cloneOperationLabel] = cloneOperation
+	}
 
 	//
 	// Set traefik labels
@@ -514,7 +531,9 @@ func (manager *RoomManagerCtx) Create(ctx context.Context, settings types.RoomSe
 	// Set browser policies
 	//
 
-	if settings.BrowserPolicy != nil {
+	// Clones already have the exact read-only policy mount from GetSettings;
+	// reuse it rather than rewriting a source policy or dropping its content.
+	if settings.BrowserPolicy != nil && cloneOperation == "" {
 		if !manager.config.StorageEnabled {
 			return "", fmt.Errorf("policies cannot be specified, because storage is disabled or unavailable")
 		}
@@ -787,6 +806,12 @@ func (manager *RoomManagerCtx) GetEntryByName(ctx context.Context, name string) 
 }
 
 func (manager *RoomManagerCtx) Remove(ctx context.Context, id string) error {
+	manager.lifecycle.Lock()
+	defer manager.lifecycle.Unlock()
+	return manager.remove(ctx, id)
+}
+
+func (manager *RoomManagerCtx) remove(ctx context.Context, id string) error {
 	_, err := manager.inspectContainer(ctx, id)
 	if err != nil {
 		return err
@@ -830,12 +855,12 @@ func (manager *RoomManagerCtx) GetSettings(ctx context.Context, id string) (*typ
 		mountType := types.MountPublic
 		hostPath := mount.Source
 
-		if strings.HasPrefix(hostPath, privateStorageRoot) {
+		if relative, ok := storageRelativePath(privateStorageRoot, hostPath); ok && manager.config.StorageEnabled {
 			mountType = types.MountPrivate
-			hostPath = strings.TrimPrefix(hostPath, privateStorageRoot)
-		} else if strings.HasPrefix(hostPath, templateStorageRoot) {
+			hostPath = relative
+		} else if relative, ok := storageRelativePath(templateStorageRoot, hostPath); ok && !mount.RW && manager.config.StorageEnabled {
 			mountType = types.MountTemplate
-			hostPath = strings.TrimPrefix(hostPath, templateStorageRoot)
+			hostPath = relative
 		} else if !mount.RW {
 			mountType = types.MountProtected
 		}
@@ -1055,6 +1080,12 @@ func (manager *RoomManagerCtx) GetStats(ctx context.Context, id string) (*types.
 }
 
 func (manager *RoomManagerCtx) Start(ctx context.Context, id string) error {
+	manager.lifecycle.Lock()
+	defer manager.lifecycle.Unlock()
+	return manager.start(ctx, id)
+}
+
+func (manager *RoomManagerCtx) start(ctx context.Context, id string) error {
 	container, err := manager.inspectContainer(ctx, id)
 	if err != nil {
 		return err
@@ -1074,6 +1105,8 @@ func (manager *RoomManagerCtx) Start(ctx context.Context, id string) error {
 }
 
 func (manager *RoomManagerCtx) Stop(ctx context.Context, id string) error {
+	manager.lifecycle.Lock()
+	defer manager.lifecycle.Unlock()
 	_, err := manager.inspectContainer(ctx, id)
 	if err != nil {
 		return err
@@ -1087,6 +1120,8 @@ func (manager *RoomManagerCtx) Stop(ctx context.Context, id string) error {
 }
 
 func (manager *RoomManagerCtx) Restart(ctx context.Context, id string) error {
+	manager.lifecycle.Lock()
+	defer manager.lifecycle.Unlock()
 	_, err := manager.inspectContainer(ctx, id)
 	if err != nil {
 		return err
@@ -1100,6 +1135,8 @@ func (manager *RoomManagerCtx) Restart(ctx context.Context, id string) error {
 }
 
 func (manager *RoomManagerCtx) Pause(ctx context.Context, id string) error {
+	manager.lifecycle.Lock()
+	defer manager.lifecycle.Unlock()
 	_, err := manager.inspectContainer(ctx, id)
 	if err != nil {
 		return err
