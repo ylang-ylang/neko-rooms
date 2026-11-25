@@ -1,4 +1,11 @@
+.git
+.github
+scripts
 dev
 docs
+examples
 client/node_modules
 client/dist
+.env
+release.json
+release.md
