@@ -21,7 +21,18 @@
         </v-tooltip>
       </template>
       <template v-slot:[`item.name`]="{ item }">
-        <div class="room-name">{{ item.name }}<div v-if="item.profile_id" class="text-caption" :title="item.profile_id">Profile: {{ item.profile_name }}</div></div>
+        <div class="room-name">
+          <div class="room-title">{{ item.name }}</div>
+          <v-tooltip v-if="item.profile_id" bottom open-delay="300">
+            <template v-slot:activator="{ on, attrs }">
+              <v-chip v-bind="attrs" v-on="on" small label outlined color="teal lighten-2" class="room-profile" :aria-label="'Browser profile: ' + item.profile_name">
+                <v-icon left small>mdi-account-circle-outline</v-icon>
+                <span class="room-profile-name">{{ item.profile_name }}</span>
+              </v-chip>
+            </template>
+            <span class="room-profile-tooltip">{{ item.profile_name }} ({{ item.profile_id }})</span>
+          </v-tooltip>
+        </div>
       </template>
       <template v-slot:[`item.neko_image`]="{ item }">
         <div class="room-image d-flex align-center">
@@ -257,9 +268,16 @@ export default class RoomsList extends Vue {
 
 <style scoped>
 .room-name {
+  width: 12rem;
   min-width: 10rem;
+  max-width: 14rem;
   overflow-wrap: anywhere;
 }
+.room-title { font-weight: 600; line-height: 1.4; }
+.room-profile { max-width: 100%; margin-top: 5px; }
+.room-profile-tooltip { display: block; max-width: min(400px, calc(100vw - 48px)); white-space: normal; overflow-wrap: anywhere; }
+.room-profile ::v-deep .v-chip__content { min-width: 0; max-width: 100%; }
+.room-profile-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .room-image {
   min-width: 12rem;
   max-width: 24rem;

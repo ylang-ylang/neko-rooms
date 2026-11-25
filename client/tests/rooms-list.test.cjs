@@ -66,7 +66,7 @@ test('room columns keep original entries and optional max connections', () => {
 test('long names and pinned images retain full visible text and full image title', () => {
   const instance = list()
   for (const room of rooms) {
-    assert.equal(text(slot(instance, 'name', room)[0]), room.name)
+    assert.equal(text(slot(instance, 'name', room)[0]).trim(), room.name)
     const image = slot(instance, 'neko_image', room)[0]
     const [recreate, label] = elements(image.children)
     assert.deepEqual(plain(recreate.componentOptions.propsData), { action: 'recreate', roomId: room.id })
@@ -75,6 +75,22 @@ test('long names and pinned images retain full visible text and full image title
     assert.equal(text(slot(instance, 'status', room)[0]).trim(), room.status)
     assert.equal(table(instance).data.scopedSlots['item.created']({ item: room })[0].text.trim(), 'relative ' + room.created)
   }
+  instance.$destroy()
+})
+
+test('profile names use an icon chip below the room title with a full-name tooltip', () => {
+  const instance = list()
+  const room = { ...rooms[0], profile_id: 'independent-profile', profile_name: 'Long account name '.repeat(8) }
+  const [title, tooltip] = elements(slot(instance, 'name', room)[0].children)
+  assert.equal(title.data.staticClass, 'room-title')
+  assert.equal(text(title), room.name)
+  const chip = elements(tooltip.data.scopedSlots.activator({ on: {}, attrs: {} }))[0]
+  assert.equal(chip.data.staticClass, 'room-profile')
+  assert.equal(chip.data.attrs['aria-label'], 'Browser profile: ' + room.profile_name)
+  const [icon, label] = elements(chip.children)
+  assert.equal(text(icon), 'mdi-account-circle-outline')
+  assert.equal(text(label), room.profile_name)
+  assert.equal(text(elements(tooltip.children)[0]), room.profile_name + ' (' + room.profile_id + ')')
   instance.$destroy()
 })
 
@@ -320,5 +336,9 @@ test('layout rules are scoped, wrap identifiers and leave mux action buttons on 
   assert.match(style, /\.room-image\s*\{[^}]*max-width:/s)
   assert.match(style, /\.room-image span\s*\{[^}]*min-width: 0;[^}]*overflow-wrap: anywhere/s)
   assert.match(style, /\.room-actions\s*\{[^}]*white-space: nowrap/s)
-  assert.doesNotMatch(style, /overflow:\s*hidden|table-layout:\s*fixed/)
+  assert.doesNotMatch(style, /table-layout:\s*fixed/)
+  for (const selector of ['room-name', 'room-image span']) {
+    assert.doesNotMatch(style.match(new RegExp('\\.' + selector + '\\s*\\{([^}]*)\\}'))[1], /overflow:\s*hidden/)
+  }
+  assert.match(style, /\.room-profile-name\s*\{[^}]*overflow: hidden;[^}]*text-overflow: ellipsis;[^}]*white-space: nowrap/s)
 })

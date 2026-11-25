@@ -30,9 +30,22 @@
         </v-row>
 
         <template v-if="storageEnabled">
-          <v-select v-model="data.profile_id" :items="profileOptions" label="Browser profile"
+          <v-select v-model="data.profile_id" :items="profileOptions" label="Browser profile" class="browser-profile-select"
+            :menu-props="{ maxWidth: 'min(552px, calc(100vw - 96px))', maxHeight: 360, contentClass: 'browser-profile-menu' }"
             hint="Exclusive binding lasts until deployment removal, even while stopped. Removing a deployment keeps its profile and Downloads."
-            persistent-hint :disabled="profilesLoading" />
+            persistent-hint :disabled="profilesLoading">
+            <template v-slot:selection="{ item }">
+              <span class="profile-selection" :title="item.text">{{ item.profileName || item.text }}</span>
+            </template>
+            <template v-slot:item="{ item, attrs, on }">
+              <v-list-item v-bind="attrs" v-on="on" class="profile-option">
+                <v-list-item-content>
+                  <div class="profile-option-name" :title="item.text">{{ item.profileName || item.text }}</div>
+                  <div class="profile-option-detail">{{ item.binding || 'A new independent profile will be created.' }}</div>
+                </v-list-item-content>
+              </v-list-item>
+            </template>
+          </v-select>
           <v-text-field v-if="!data.profile_id" v-model="data.profile_name" label="New profile name (optional)"
             maxlength="120" hint="Defaults to the deployment name. A durable profile is always created." persistent-hint />
           <v-alert v-if="profilesError" type="error" dense outlined>{{ profilesError }}</v-alert>
@@ -692,6 +705,8 @@ export default class RoomsCreate extends Vue {
       { text: 'Create a new durable profile', value: '' },
       ...this.$store.state.profiles.map((profile: BrowserProfile) => ({
         text: `${profile.name} (${profile.id})${profile.room_id ? ' — bound to ' + profile.room_name : ''}`,
+        profileName: profile.name,
+        binding: profile.room_id ? `Bound to ${profile.room_name}` : 'Available',
         value: profile.id, disabled: !!profile.room_id,
       })),
     ]
@@ -826,3 +841,11 @@ export default class RoomsCreate extends Vue {
   }
 }
 </script>
+
+<style scoped>
+.browser-profile-select { margin-top: 24px; }
+.profile-selection { min-width: 0; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.profile-option { min-width: 0; }
+.profile-option-name { white-space: nowrap; line-height: 1.4; overflow: hidden; text-overflow: ellipsis; font-weight: 500; }
+.profile-option-detail { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-size: 12px; line-height: 1.4; opacity: .75; margin-top: 3px; }
+</style>

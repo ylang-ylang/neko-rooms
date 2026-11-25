@@ -92,7 +92,7 @@ This is shared-browser control, not a sandbox: use existing contexts/pages, do n
 
 ### Room presets
 
-New-room defaults use Neko API v3, 1920×1080 at 30 fps, 2 GiB shared memory and developer tools enabled. **Browser profiles are durable named resources**, independent of deployment names: select an available profile or create a new one in **Add room**, and manage them through **Profiles**. Quick room automatically creates a durable profile. Deployment removal retains the complete browser profile and Downloads; only explicit, unbound Profile deletion removes data. Clone forks an independent profile using its existing one-name form. Existing managed directories are adopted in place without restarting browsers. See [storage and profile recovery](./docs/storage.md).
+New-room defaults use Neko API v3, 1920×1080 at 30 fps, 2 GiB shared memory and developer tools enabled. **Browser profiles are durable named resources**, independent of deployment names: select an available profile or create a new one in **Add room**, and manage them through **Profiles**. Quick room automatically creates a durable profile. Deployment removal retains the complete browser profile and Downloads by default; its confirmation offers unchecked, explicit permanent Profile deletion after deployment removal. Only an unbound Profile can be deleted. Clone forks an independent profile using its existing one-name form. Existing managed directories are adopted in place without restarting browsers. See [storage and profile recovery](./docs/storage.md).
 
 ## One-entry HTTP/WebSocket desktop (NAS mode)
 

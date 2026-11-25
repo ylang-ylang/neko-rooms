@@ -81,3 +81,111 @@ test('Profiles management requires explicit confirmation and blocks bound deleti
   assert.equal(instance.name, '')
   instance.$destroy()
 })
+
+function removalFixture({ confirmed = true, choice = 0, fail } = {}) {
+  const component = load('src/components/RoomActionBtn.vue').default
+  const calls = [], dialogs = []
+  const instance = new component({
+    propsData: { action: 'remove', roomId: 'clone-room' },
+    beforeCreate() {
+      this.$store = {
+        state: { rooms: [
+          { id: 'source-room', name: 'Source', profile_id: 'source-profile', profile_name: 'Original account' },
+          { id: 'clone-room', name: 'Clone', profile_id: 'clone-profile', profile_name: 'Independent copy' },
+        ] },
+        dispatch: async (...args) => {
+          calls.push(args)
+          if (args[0] === fail) throw { response: { status: 409, data: 'profile is bound to another deployment' } }
+        },
+      }
+      this.$swal = async options => { dialogs.push(options); return { isConfirmed: confirmed, value: choice } }
+    },
+  })
+  return { instance, calls, dialogs }
+}
+
+test('deployment removal keeps its profile when the checkbox is unchecked', async () => {
+  const { instance, calls, dialogs } = removalFixture()
+  await instance.Action()
+  assert.deepEqual(JSON.parse(JSON.stringify(calls)), [['ROOMS_REMOVE', 'clone-room'], ['PROFILES_LOAD']])
+  assert.equal(dialogs[0].input, 'checkbox')
+  assert.equal(dialogs[0].inputValue, 0)
+  assert.match(dialogs[0].text, /Independent copy.*kept by default.*cloning are not affected/)
+  assert.match(dialogs[0].inputPlaceholder, /cookies.*history.*extensions.*site data.*Downloads.*cannot be undone/)
+  assert.equal(dialogs[1].title, 'Deployment removed; profile kept')
+  assert.equal(instance.loading, false)
+  instance.$destroy()
+})
+
+test('explicit opt-in deletes only that profile, after deployment removal', async () => {
+  const { instance, calls, dialogs } = removalFixture({ choice: 1 })
+  await instance.Action()
+  assert.deepEqual(JSON.parse(JSON.stringify(calls)), [
+    ['ROOMS_REMOVE', 'clone-room'], ['PROFILES_DELETE', 'clone-profile'], ['PROFILES_LOAD'],
+  ])
+  assert.equal(dialogs[1].title, 'Deployment and profile deleted')
+  assert.equal(calls.some(args => args.includes('source-profile')), false)
+  instance.$destroy()
+})
+
+test('cancellation does not remove either resource and confirmation resets', async () => {
+  const { instance, calls, dialogs } = removalFixture({ confirmed: false, choice: 1 })
+  await instance.Action()
+  await instance.Action()
+  assert.equal(calls.length, 0)
+  assert.equal(dialogs.length, 2)
+  assert.deepEqual(dialogs.map(options => options.inputValue), [0, 0])
+  assert.equal(instance.loading, false)
+  instance.$destroy()
+})
+
+test('room deletion failure never attempts profile deletion', async () => {
+  const { instance, calls, dialogs } = removalFixture({ choice: 1, fail: 'ROOMS_REMOVE' })
+  await instance.Action()
+  assert.deepEqual(JSON.parse(JSON.stringify(calls)), [['ROOMS_REMOVE', 'clone-room']])
+  assert.equal(dialogs[1].icon, 'error')
+  instance.$destroy()
+})
+
+test('a profile that was rebound is not force-deleted or retried', async () => {
+  const { instance, calls, dialogs } = removalFixture({ choice: 1, fail: 'PROFILES_DELETE' })
+  await instance.Action()
+  assert.deepEqual(JSON.parse(JSON.stringify(calls)), [['ROOMS_REMOVE', 'clone-room'], ['PROFILES_DELETE', 'clone-profile']])
+  assert.equal(dialogs[1].title, 'Deployment removed; profile deletion not confirmed')
+  assert.match(dialogs[1].text, /bound to another deployment.*Refresh Profiles.*Do not remove the deployment again/)
+  assert.equal(instance.loading, false)
+  instance.$destroy()
+})
+
+test('a refresh failure reports committed deletion without repeating it', async () => {
+  const { instance, calls, dialogs } = removalFixture({ choice: 1, fail: 'PROFILES_LOAD' })
+  await instance.Action()
+  assert.deepEqual(JSON.parse(JSON.stringify(calls)), [['ROOMS_REMOVE', 'clone-room'], ['PROFILES_DELETE', 'clone-profile'], ['PROFILES_LOAD']])
+  assert.equal(dialogs[1].title, 'Deployment and profile deleted')
+  assert.match(dialogs[1].text, /do not repeat the deletion/)
+  instance.$destroy()
+})
+
+test('duplicate remove clicks cannot open another confirmation', async () => {
+  const { instance, calls, dialogs } = removalFixture()
+  let confirm
+  instance.$swal = options => {
+    dialogs.push(options)
+    return new Promise(resolve => { confirm = resolve })
+  }
+  const pending = instance.Action()
+  await instance.Action()
+  assert.equal(dialogs.length, 1)
+  confirm({ isConfirmed: false, value: 0 })
+  await pending
+  assert.equal(calls.length, 0)
+  assert.equal(instance.loading, false)
+  instance.$destroy()
+})
+
+test('profile templates preserve valid scoped selection and responsive list markup', () => {
+  for (const file of ['Profiles.vue', 'RoomsCreate.vue', 'RoomsList.vue', 'RoomActionBtn.vue']) {
+    const source = readFileSync(resolve(root, 'src/components', file), 'utf8')
+    assert.deepEqual(compiler.compile(compiler.parseComponent(source).template.content).errors, [], file)
+  }
+})
