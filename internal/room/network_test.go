@@ -106,7 +106,7 @@ func (f *fakeDocker) serveHTTP(w http.ResponseWriter, r *http.Request) {
 			mounts = append(mounts, dockerContainer.MountPoint{Type: mount.Type, Source: mount.Source, Destination: mount.Target, RW: !mount.ReadOnly})
 		}
 		f.containers[id] = dockerContainer.InspectResponse{
-			ContainerJSONBase: &dockerContainer.ContainerJSONBase{ID: id, Name: "/" + r.URL.Query().Get("name"), HostConfig: payload.HostConfig, State: &dockerContainer.State{Status: "running", Running: true}},
+			ContainerJSONBase: &dockerContainer.ContainerJSONBase{ID: id, Name: "/" + r.URL.Query().Get("name"), HostConfig: payload.HostConfig, State: &dockerContainer.State{Status: "created"}},
 			Config:            &payload.Config, Mounts: mounts,
 		}
 		w.WriteHeader(http.StatusCreated)
@@ -274,13 +274,21 @@ func TestRelayRoomsRoundTripLegacyAdoptionAndCapacity(t *testing.T) {
 		settings := networkSettings(name)
 		settings.Envs["CUSTOM_ENV"] = "literal-$DO_NOT_SUBSTITUTE"
 		settings.Mounts = []types.RoomMount{{Type: types.MountPrivate, HostPath: "/profile", ContainerPath: "/home/neko/.config/chromium"}, {Type: types.MountPrivate, HostPath: "/Downloads", ContainerPath: "/home/neko/Downloads"}}
+		profile, err := manager.CreateProfile(ctx, name)
+		if err != nil {
+			t.Fatal(err)
+		}
+		settings.ProfileID = profile.ID
 		for _, mount := range settings.Mounts {
-			if err := os.MkdirAll(filepath.Join(cfg.StorageInternal, privateStoragePath, name, mount.HostPath), 0755); err != nil {
+			if err := os.MkdirAll(filepath.Join(cfg.StorageInternal, profileStoragePath, profile.ID, mount.HostPath), 0755); err != nil {
 				t.Fatal(err)
 			}
 		}
 		id, err := manager.Create(ctx, settings)
 		if err != nil {
+			t.Fatal(err)
+		}
+		if err := manager.Start(ctx, id); err != nil {
 			t.Fatal(err)
 		}
 		entry, err := manager.GetEntryByName(ctx, name)
@@ -307,7 +315,7 @@ func TestRelayRoomsRoundTripLegacyAdoptionAndCapacity(t *testing.T) {
 		t.Fatal(err)
 	}
 	fake.mu.Lock()
-	legacy := dockerContainer.InspectResponse{ContainerJSONBase: &dockerContainer.ContainerJSONBase{ID: strings.Repeat("b", 64), Name: "/test-rooms-legacy", HostConfig: &dockerContainer.HostConfig{PortBindings: nat.PortMap{"59004/udp": {{HostPort: "59004"}}}}, State: &dockerContainer.State{Status: "running", Running: true}}, Config: &dockerContainer.Config{Image: "neko:test", Env: legacyEnv, Labels: map[string]string{"m1k1o.neko_rooms.name": "legacy", "m1k1o.neko_rooms.instance": cfg.InstanceName, "m1k1o.neko_rooms.neko_image": "neko:test", "m1k1o.neko_rooms.api_version": "3", "m1k1o.neko_rooms.epr.min": "59004", "m1k1o.neko_rooms.epr.max": "59005"}}}
+	legacy := dockerContainer.InspectResponse{ContainerJSONBase: &dockerContainer.ContainerJSONBase{ID: strings.Repeat("b", 64), Name: "/test-rooms-legacy", HostConfig: &dockerContainer.HostConfig{PortBindings: nat.PortMap{"59004/udp": {{HostPort: "59004"}}}}, State: &dockerContainer.State{Status: "created"}}, Config: &dockerContainer.Config{Image: "neko:test", Env: legacyEnv, Labels: map[string]string{"m1k1o.neko_rooms.name": "legacy", "m1k1o.neko_rooms.instance": cfg.InstanceName, "m1k1o.neko_rooms.neko_image": "neko:test", "m1k1o.neko_rooms.api_version": "3", "m1k1o.neko_rooms.epr.min": "59004", "m1k1o.neko_rooms.epr.max": "59005"}}}
 	fake.containers[legacy.ID] = legacy
 	foreign := legacy
 	foreign.ContainerJSONBase = &dockerContainer.ContainerJSONBase{ID: strings.Repeat("f", 64), State: legacy.State, HostConfig: legacy.HostConfig}

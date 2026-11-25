@@ -18,7 +18,7 @@ import (
 // A paused filesystem snapshot includes opaque profile identity but cannot
 // include Chrome's pending cookie writes or memory-only session cookies. CDP
 // supplements that snapshot using the existing default browser context only.
-// Cookie values remain exclusively in memory, never logs, responses or files.
+// Values stay private: never logs/API; durable profiles use a 0600 checkpoint.
 type browserCDP struct {
 	conn *websocket.Conn
 	id   int

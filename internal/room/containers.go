@@ -40,6 +40,13 @@ func (manager *RoomManagerCtx) containerToEntry(container dockerContainer.Summar
 		ContainerLabels: container.Labels,
 	}
 
+	registry, err := manager.loadProfiles()
+	if err != nil {
+		return nil, err
+	}
+	if profile := profileForContainer(registry, container.Labels, container.Mounts, manager.config.StorageExternal); profile != nil {
+		entry.ProfileID, entry.ProfileName = profile.ID, profile.Name
+	}
 	if labels.Mux {
 		entry.MaxConnections = 0
 	}

@@ -34,6 +34,9 @@ func (manager *RoomManagerCtx) Clone(ctx context.Context, id, name string) (entr
 	if name == "" || !dockerNames.RestrictedNamePattern.MatchString(name) {
 		return nil, fmt.Errorf("%w: invalid new room name, must match %s", types.ErrInvalidRoomSettings, dockerNames.RestrictedNameChars)
 	}
+	if _, err := manager.reconcileProfiles(ctx); err != nil {
+		return nil, err
+	}
 	source, err := manager.inspectContainer(ctx, id)
 	if err != nil {
 		return nil, err
@@ -53,13 +56,14 @@ func (manager *RoomManagerCtx) Clone(ctx context.Context, id, name string) (entr
 	if err := manager.validateCloneMounts(source, settings); err != nil {
 		return nil, err
 	}
-	sourceRoot := filepath.Join(manager.config.StorageInternal, privateStoragePath, settings.Name)
-	targetRoot := filepath.Join(manager.config.StorageInternal, privateStoragePath, name)
-	if _, err := os.Lstat(targetRoot); err == nil {
-		return nil, types.ErrRoomNameConflict
-	} else if !errors.Is(err, os.ErrNotExist) {
-		return nil, errors.New("cannot inspect target storage")
+	sourceProfile, err := manager.containerProfile(source)
+	if err != nil {
+		return nil, err
 	}
+	if sourceProfile == nil {
+		return nil, fmt.Errorf("%w: source has no persistent profile", types.ErrInvalidRoomSettings)
+	}
+	sourceRoot := filepath.Join(manager.config.StorageInternal, sourceProfile.Root)
 	// Preserve explicit hostnames; regenerate the default name-bound hostname.
 	if settings.Hostname == manager.config.InstanceName+"-"+settings.Name {
 		settings.Hostname = ""
@@ -80,10 +84,17 @@ func (manager *RoomManagerCtx) Clone(ctx context.Context, id, name string) (entr
 	if err != nil {
 		return nil, errors.New("cannot reserve clone transaction")
 	}
-	staging, err := os.MkdirTemp(filepath.Dir(targetRoot), ".clone-")
+	registry, err := manager.reconcileProfiles(ctx)
 	if err != nil {
-		return nil, errors.New("cannot reserve clone staging storage")
+		return nil, err
 	}
+	targetProfile, err := manager.newProfile(registry, name)
+	if err != nil {
+		return nil, err
+	}
+	targetRoot := filepath.Join(manager.config.StorageInternal, targetProfile.Root)
+	settings.ProfileID, settings.ProfileName = targetProfile.ID, ""
+	var staging string
 	committed, success, createAttempted := false, false, false
 	var targetID string
 	// Cleanup has an independent context: a disconnected client must not leave
@@ -106,6 +117,10 @@ func (manager *RoomManagerCtx) Clone(ctx context.Context, id, name string) (entr
 			}
 		}
 		if targetID != "" {
+			if err := manager.client.ContainerStop(cleanup, targetID, dockerContainer.StopOptions{Signal: "SIGTERM", Timeout: &manager.config.StopTimeoutSec}); err != nil && !errdefs.IsNotFound(err) {
+				resultErr = errors.Join(resultErr, errors.New("failed to stop incomplete clone; target profile retained"))
+				return
+			}
 			if err := manager.client.ContainerRemove(cleanup, targetID, dockerContainer.RemoveOptions{Force: true, RemoveVolumes: true}); err != nil && !errdefs.IsNotFound(err) {
 				resultErr = errors.Join(resultErr, errors.New("failed to remove incomplete clone container; target storage retained"))
 				return // Do not remove data still mounted by the failed target.
@@ -117,8 +132,19 @@ func (manager *RoomManagerCtx) Clone(ctx context.Context, id, name string) (entr
 		}
 		if err := os.RemoveAll(ownedPath); err != nil {
 			resultErr = errors.Join(resultErr, errors.New("failed to remove incomplete clone storage"))
+		} else if err := manager.discardUnboundProfile(cleanup, targetProfile.ID); err != nil {
+			resultErr = errors.Join(resultErr, err)
 		}
 	}()
+
+	// Reserve an ID first; atomic snapshot commit requires an absent destination.
+	if err := os.Remove(targetRoot); err != nil {
+		return nil, errors.New("cannot prepare forked profile storage")
+	}
+	staging, err = os.MkdirTemp(filepath.Dir(targetRoot), ".clone-")
+	if err != nil {
+		return nil, errors.New("cannot reserve clone staging storage")
+	}
 
 	var cookies []map[string]json.RawMessage
 	var localStorage []*cloneFrame
@@ -141,6 +167,11 @@ func (manager *RoomManagerCtx) Clone(ctx context.Context, id, name string) (entr
 		return nil, errors.New("cannot atomically commit clone storage")
 	}
 	committed = true
+	if cookies != nil {
+		if err := atomicPrivateJSON(filepath.Join(targetRoot, identityCheckpoint), profileIdentity{cookies, localStorage}); err != nil {
+			return nil, err
+		}
+	}
 
 	// Once Docker Create has begun, finish collecting its result despite HTTP
 	// cancellation, then roll back immediately if the request was canceled.
@@ -159,14 +190,6 @@ func (manager *RoomManagerCtx) Clone(ctx context.Context, id, name string) (entr
 	}
 	if err := manager.start(ctx, targetID); err != nil {
 		return nil, errors.New("failed to start clone container")
-	}
-	if cookies != nil {
-		if err := manager.restoreCookies(ctx, targetID+":9223", cookies); err != nil {
-			return nil, fmt.Errorf("restore cloned browser identity: %w", err)
-		}
-		if err := manager.restoreLocalStorage(ctx, targetID+":9223", localStorage); err != nil {
-			return nil, fmt.Errorf("restore active browser storage: %w", err)
-		}
 	}
 	entry, err = manager.GetEntry(ctx, targetID)
 	if err != nil {
@@ -207,7 +230,14 @@ func (manager *RoomManagerCtx) validateCloneMounts(source *dockerContainer.Inspe
 	if !manager.config.StorageEnabled {
 		return fmt.Errorf("%w: cloning identity requires managed persistent storage", types.ErrInvalidRoomSettings)
 	}
-	root := filepath.Join(manager.config.StorageInternal, privateStoragePath, settings.Name)
+	profile, err := manager.containerProfile(source)
+	if err != nil {
+		return err
+	}
+	if profile == nil {
+		return fmt.Errorf("%w: source has no managed persistent profile", types.ErrInvalidRoomSettings)
+	}
+	root := filepath.Join(manager.config.StorageInternal, profile.Root)
 	info, err := os.Lstat(root)
 	if err != nil || !info.IsDir() {
 		return fmt.Errorf("%w: source managed storage is unavailable", types.ErrInvalidRoomSettings)

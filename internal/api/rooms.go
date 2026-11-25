@@ -39,10 +39,7 @@ func (manager *ApiManagerCtx) roomsList(w http.ResponseWriter, r *http.Request) 
 }
 
 func roomSettingsErrorStatus(err error) int {
-	if errors.Is(err, types.ErrInvalidRoomSettings) {
-		return http.StatusBadRequest
-	}
-	return http.StatusInternalServerError
+	return profileErrorStatus(err)
 }
 
 func (manager *ApiManagerCtx) roomCreate(w http.ResponseWriter, r *http.Request) {
@@ -79,7 +76,7 @@ func (manager *ApiManagerCtx) roomCreate(w http.ResponseWriter, r *http.Request)
 	if start {
 		if err := manager.rooms.Start(r.Context(), ID); err != nil {
 			manager.logger.Error().Err(err).Msg("create: failed to start room")
-			http.Error(w, err.Error(), 500)
+			http.Error(w, err.Error(), profileErrorStatus(err))
 			return
 		}
 	}
@@ -138,36 +135,10 @@ func (manager *ApiManagerCtx) roomRecreate(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
-	if err := manager.rooms.ValidateSettings(r.Context(), *settings); err != nil {
-		http.Error(w, err.Error(), roomSettingsErrorStatus(err))
-		return
-	}
-
-	if err := manager.rooms.Remove(r.Context(), roomId); err != nil {
-		manager.logger.Error().Err(err).Msg("recreate: failed to remove room")
-		http.Error(w, err.Error(), 500)
-		return
-	}
-
-	ID, err := manager.rooms.Create(r.Context(), *settings)
+	response, err := manager.rooms.Recreate(r.Context(), roomId, *settings, start)
 	if err != nil {
-		manager.logger.Error().Err(err).Msg("recreate: failed to create room")
-		http.Error(w, err.Error(), roomSettingsErrorStatus(err))
-		return
-	}
-
-	if start {
-		if err := manager.rooms.Start(r.Context(), ID); err != nil {
-			manager.logger.Error().Err(err).Msg("recreate: failed to start room")
-			http.Error(w, err.Error(), 500)
-			return
-		}
-	}
-
-	response, err := manager.rooms.GetEntry(r.Context(), ID)
-	if err != nil {
-		manager.logger.Error().Err(err).Msg("recreate: failed to get room entry")
-		http.Error(w, err.Error(), 500)
+		manager.logger.Error().Err(err).Msg("recreate: failed to replace deployment")
+		http.Error(w, err.Error(), profileErrorStatus(err))
 		return
 	}
 
@@ -250,11 +221,7 @@ func (manager *ApiManagerCtx) roomGenericAction(action func(ctx context.Context,
 
 		err := action(r.Context(), roomId)
 		if err != nil {
-			if errors.Is(err, types.ErrRoomNotFound) {
-				http.Error(w, err.Error(), 404)
-			} else {
-				http.Error(w, err.Error(), 500)
-			}
+			http.Error(w, err.Error(), profileErrorStatus(err))
 			return
 		}
 

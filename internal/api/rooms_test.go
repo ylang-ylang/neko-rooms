@@ -45,6 +45,20 @@ func (f *recreateRooms) GetEntry(context.Context, string) (*types.RoomEntry, err
 	return &types.RoomEntry{ID: "aaaaaaaaaaaa", Name: "legacy"}, nil
 }
 
+func (f *recreateRooms) Recreate(ctx context.Context, id string, settings types.RoomSettings, start bool) (*types.RoomEntry, error) {
+	if err := f.ValidateSettings(ctx, settings); err != nil {
+		return nil, err
+	}
+	if err := f.Remove(ctx, id); err != nil {
+		return nil, err
+	}
+	replacement, err := f.Create(ctx, settings)
+	if err != nil {
+		return nil, err
+	}
+	return f.GetEntry(ctx, replacement)
+}
+
 func TestRecreateValidatesNetworkingBeforeRemovingExistingRoom(t *testing.T) {
 	for _, test := range []struct {
 		name   string

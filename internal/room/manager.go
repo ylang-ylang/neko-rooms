@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/csv"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net"
 	"net/url"
@@ -344,13 +345,13 @@ func (manager *RoomManagerCtx) Create(ctx context.Context, settings types.RoomSe
 	return manager.create(ctx, settings, "")
 }
 
-func (manager *RoomManagerCtx) create(ctx context.Context, settings types.RoomSettings, cloneOperation string) (string, error) {
+func (manager *RoomManagerCtx) create(ctx context.Context, settings types.RoomSettings, cloneOperation string) (id string, resultErr error) {
 	settings, image, err := manager.prepareSettings(ctx, settings)
 	if err != nil {
 		return "", err
 	}
 
-	// TODO: Check if path name exists.
+	// Profile storage identity is independent of deployment names.
 	roomName := settings.Name
 	if roomName == "" {
 		var err error
@@ -360,6 +361,27 @@ func (manager *RoomManagerCtx) create(ctx context.Context, settings types.RoomSe
 		}
 	}
 
+	settings.Name = roomName
+	if _, err := manager.containerByName(ctx, roomName); err == nil {
+		return "", types.ErrRoomNameConflict
+	} else if !errors.Is(err, types.ErrRoomNotFound) {
+		return "", err
+	}
+	autoProfile := settings.ProfileID == ""
+	profile, err := manager.prepareProfile(ctx, &settings)
+	if err != nil {
+		return "", err
+	}
+	defer func() {
+		if resultErr == nil || profile == nil || !autoProfile {
+			return
+		}
+		cleanup, cancel := context.WithTimeout(context.WithoutCancel(ctx), 20*time.Second)
+		defer cancel()
+		if err := manager.discardUnboundProfile(cleanup, profile.ID); err != nil && !errors.Is(err, types.ErrProfileInUse) {
+			resultErr = errors.Join(resultErr, err)
+		}
+	}()
 	containerName := manager.config.InstanceName + "-" + roomName
 
 	//
@@ -502,6 +524,12 @@ func (manager *RoomManagerCtx) create(ctx context.Context, settings types.RoomSe
 		labels[key] = val
 	}
 
+	// Profile and cleanup ownership cannot be overridden by custom labels.
+	if profile != nil {
+		labels[profileLabel] = profile.ID
+	} else {
+		delete(labels, profileLabel)
+	}
 	// Cleanup ownership is authoritative, not an operator label override.
 	if cloneOperation != "" {
 		labels[cloneOperationLabel] = cloneOperation
@@ -597,7 +625,7 @@ func (manager *RoomManagerCtx) create(ctx context.Context, settings types.RoomSe
 			}
 
 			// ensure that target exists with correct permissions
-			internalPath := path.Join(manager.config.StorageInternal, privateStoragePath, roomName, hostPath)
+			internalPath := path.Join(manager.config.StorageInternal, profile.Root, hostPath)
 			if _, err := os.Stat(internalPath); os.IsNotExist(err) {
 				if err := os.MkdirAll(internalPath, os.ModePerm); err != nil {
 					return "", err
@@ -609,7 +637,7 @@ func (manager *RoomManagerCtx) create(ctx context.Context, settings types.RoomSe
 			}
 
 			// prefix host path
-			hostPath = path.Join(manager.config.StorageExternal, privateStoragePath, roomName, hostPath)
+			hostPath = path.Join(manager.config.StorageExternal, profile.Root, hostPath)
 		case types.MountTemplate:
 			if !manager.config.StorageEnabled {
 				return "", fmt.Errorf("template mounts cannot be specified, because storage is disabled or unavailable")
@@ -779,6 +807,9 @@ func (manager *RoomManagerCtx) create(ctx context.Context, settings types.RoomSe
 		return "", err
 	}
 
+	if _, err := manager.reconcileProfiles(ctx); err != nil {
+		return "", err
+	}
 	return container.ID[:12], nil
 }
 
@@ -813,27 +844,24 @@ func (manager *RoomManagerCtx) Remove(ctx context.Context, id string) error {
 }
 
 func (manager *RoomManagerCtx) remove(ctx context.Context, id string) error {
-	_, err := manager.inspectContainer(ctx, id)
-	if err != nil {
+	if _, err := manager.reconcileProfiles(ctx); err != nil {
 		return err
 	}
-
-	// Stop the actual container
-	err = manager.client.ContainerStop(ctx, id, dockerContainer.StopOptions{
-		Signal:  "SIGTERM",
-		Timeout: &manager.config.StopTimeoutSec,
-	})
-
-	if err != nil {
+	if err := manager.stop(ctx, id); err != nil {
 		return err
 	}
-
+	// Remove only the deployment; its durable profile is a separate resource.
+	var err error
 	// Remove the actual container
 	err = manager.client.ContainerRemove(ctx, id, dockerContainer.RemoveOptions{
 		RemoveVolumes: true,
 		Force:         true,
 	})
 
+	if err != nil {
+		return err
+	}
+	_, err = manager.reconcileProfiles(ctx)
 	return err
 }
 
@@ -848,7 +876,14 @@ func (manager *RoomManagerCtx) GetSettings(ctx context.Context, id string) (*typ
 		return nil, err
 	}
 
+	profile, err := manager.containerProfile(container)
+	if err != nil {
+		return nil, err
+	}
 	privateStorageRoot := path.Join(manager.config.StorageExternal, privateStoragePath, labels.Name)
+	if profile != nil {
+		privateStorageRoot = path.Join(manager.config.StorageExternal, profile.Root)
+	}
 	templateStorageRoot := path.Join(manager.config.StorageExternal, templateStoragePath)
 
 	mounts := []types.RoomMount{}
@@ -977,6 +1012,10 @@ func (manager *RoomManagerCtx) GetSettings(ctx context.Context, id string) (*typ
 		BrowserPolicy:  browserPolicy,
 	}
 
+	if profile != nil {
+		settings.ProfileID = profile.ID
+		settings.ProfileName = profile.Name
+	}
 	if labels.Mux {
 		settings.MaxConnections = 0
 	}
@@ -1087,52 +1126,75 @@ func (manager *RoomManagerCtx) Start(ctx context.Context, id string) error {
 }
 
 func (manager *RoomManagerCtx) start(ctx context.Context, id string) error {
+	registry, err := manager.reconcileProfiles(ctx)
+	if err != nil {
+		return err
+	}
 	container, err := manager.inspectContainer(ctx, id)
 	if err != nil {
 		return err
 	}
-
-	// If paused, we need to unpause the container
+	profile := profileForContainer(registry, container.Config.Labels, container.Mounts, manager.config.StorageExternal)
+	if profile != nil && profile.RoomID != container.ID[:12] {
+		return types.ErrProfileInUse
+	}
 	if container.State.Paused {
-		if err := manager.client.ContainerUnpause(ctx, id); err != nil {
-			return err
-		}
-
+		return manager.client.ContainerUnpause(ctx, id)
+	}
+	if container.State.Running {
 		return nil
 	}
-
-	// Start the actual container
-	return manager.client.ContainerStart(ctx, id, dockerContainer.StartOptions{})
+	if err := manager.client.ContainerStart(ctx, id, dockerContainer.StartOptions{}); err != nil {
+		return err
+	}
+	if err := manager.restoreProfile(ctx, id, profile); err != nil {
+		cleanup, cancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
+		defer cancel()
+		if stopErr := manager.client.ContainerStop(cleanup, id, dockerContainer.StopOptions{Signal: "SIGTERM", Timeout: &manager.config.StopTimeoutSec}); stopErr != nil {
+			return errors.Join(err, errors.New("cannot stop deployment after profile restoration failed"))
+		}
+		return fmt.Errorf("restore persistent profile identity: %w", err)
+	}
+	return nil
 }
 
 func (manager *RoomManagerCtx) Stop(ctx context.Context, id string) error {
 	manager.lifecycle.Lock()
 	defer manager.lifecycle.Unlock()
-	_, err := manager.inspectContainer(ctx, id)
+	if _, err := manager.reconcileProfiles(ctx); err != nil {
+		return err
+	}
+	return manager.stop(ctx, id)
+}
+func (manager *RoomManagerCtx) stop(ctx context.Context, id string) error {
+	container, err := manager.inspectContainer(ctx, id)
 	if err != nil {
 		return err
 	}
-
-	// Stop the actual container
-	return manager.client.ContainerStop(ctx, id, dockerContainer.StopOptions{
-		Signal:  "SIGTERM",
-		Timeout: &manager.config.StopTimeoutSec,
-	})
+	profile, err := manager.containerProfile(container)
+	if err != nil {
+		return err
+	}
+	if err := manager.checkpointProfile(ctx, container, profile); err != nil {
+		return err
+	}
+	if container.State.Paused {
+		if err := manager.client.ContainerUnpause(ctx, id); err != nil {
+			return err
+		}
+	}
+	return manager.client.ContainerStop(ctx, id, dockerContainer.StopOptions{Signal: "SIGTERM", Timeout: &manager.config.StopTimeoutSec})
 }
-
 func (manager *RoomManagerCtx) Restart(ctx context.Context, id string) error {
 	manager.lifecycle.Lock()
 	defer manager.lifecycle.Unlock()
-	_, err := manager.inspectContainer(ctx, id)
-	if err != nil {
+	if _, err := manager.reconcileProfiles(ctx); err != nil {
 		return err
 	}
-
-	// Restart the actual container
-	return manager.client.ContainerRestart(ctx, id, dockerContainer.StopOptions{
-		Signal:  "SIGTERM",
-		Timeout: &manager.config.StopTimeoutSec,
-	})
+	if err := manager.stop(ctx, id); err != nil {
+		return err
+	}
+	return manager.start(ctx, id)
 }
 
 func (manager *RoomManagerCtx) Pause(ctx context.Context, id string) error {
@@ -1150,6 +1212,12 @@ func (manager *RoomManagerCtx) Pause(ctx context.Context, id string) error {
 // events
 
 func (manager *RoomManagerCtx) EventsLoopStart() {
+	manager.lifecycle.Lock()
+	_, err := manager.reconcileProfiles(context.Background())
+	manager.lifecycle.Unlock()
+	if err != nil {
+		manager.logger.Error().Err(err).Msg("cannot reconcile persistent profiles")
+	}
 	manager.events.Start()
 }
 
@@ -1159,4 +1227,44 @@ func (manager *RoomManagerCtx) EventsLoopStop() error {
 
 func (manager *RoomManagerCtx) Events(ctx context.Context) (<-chan types.RoomEvent, <-chan error) {
 	return manager.events.Events(ctx)
+}
+
+// Recreate holds the same lifecycle lock across release and rebinding, so another
+// request cannot claim the profile between removing and replacing a deployment.
+func (manager *RoomManagerCtx) Recreate(ctx context.Context, id string, settings types.RoomSettings, start bool) (*types.RoomEntry, error) {
+	manager.lifecycle.Lock()
+	defer manager.lifecycle.Unlock()
+	if err := manager.ValidateSettings(ctx, settings); err != nil {
+		return nil, err
+	}
+	registry, err := manager.reconcileProfiles(ctx)
+	if err != nil {
+		return nil, err
+	}
+	source, err := manager.inspectContainer(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+	if settings.ProfileID != "" {
+		profile := findProfile(registry, settings.ProfileID)
+		if profile == nil {
+			return nil, types.ErrProfileNotFound
+		}
+		if profile.RoomID != "" && profile.RoomID != source.ID[:12] {
+			return nil, types.ErrProfileInUse
+		}
+	}
+	if err := manager.remove(ctx, id); err != nil {
+		return nil, err
+	}
+	replacement, err := manager.create(ctx, settings, "")
+	if err != nil {
+		return nil, err
+	}
+	if start {
+		if err := manager.start(ctx, replacement); err != nil {
+			return nil, err
+		}
+	}
+	return manager.GetEntry(ctx, replacement)
 }

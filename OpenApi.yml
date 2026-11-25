@@ -389,6 +389,58 @@ paths:
           description: Room or key not found
         '500':
           description: Internal server error
+  /api/profiles:
+    get:
+      tags: [rooms]
+      summary: List persistent browser profiles
+      operationId: profilesList
+      description: Ownership metadata only. Reconciles external container removal and adopts existing managed directories in place without restarting browsers.
+      responses:
+        '200':
+          description: Durable named profiles, including available profiles retained after deployment removal
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/BrowserProfile'
+    post:
+      tags: [rooms]
+      summary: Create a persistent browser profile
+      operationId: profileCreate
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ProfileCreateRequest'
+      responses:
+        '201':
+          description: Available empty profile
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BrowserProfile'
+        '400':
+          description: Invalid name or managed storage unavailable
+  /api/profiles/{profileId}:
+    delete:
+      tags: [rooms]
+      summary: Permanently delete an available profile and its data
+      operationId: profileDelete
+      parameters:
+        - name: profileId
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '204':
+          description: Profile and data deleted by explicit Owner action
+        '404':
+          description: Profile not found
+        '409':
+          description: Profile is bound to a deployment; remove that deployment first, even if stopped
   /api/rooms:
     get:
       tags:
@@ -417,7 +469,7 @@ paths:
       tags:
         - rooms
       summary: Create new room
-      description: Unsupported network/API or native-config settings return 400; Docker and operator-configuration failures remain 500.
+      description: Creates a durable profile automatically when managed storage is enabled and profile_id is omitted. Existing profiles are exclusively bound until deployment removal; conflicting use returns 409 and unknown profile IDs return 404. Network/image/password/screen settings remain deployment-owned. Unsupported settings return 400; Docker failures remain 500.
       operationId: roomCreate
       parameters:
         - in: query
@@ -440,6 +492,10 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/RoomEntry'
+        '409':
+          description: Deployment name exists or selected profile is already bound
+        '404':
+          description: Selected profile not found
         '400':
           description: Bad request
         '500':
@@ -917,6 +973,12 @@ components:
     RoomEntry:
       type: object
       properties:
+        profile_id:
+          type: string
+          description: Durable profile binding. On creation choose an available profile, or omit to create a new durable profile automatically.
+        profile_name:
+          type: string
+          description: Profile display name; on creation names a new profile when profile_id is omitted. Defaults to the deployment name.
         id:
           type: string
           example: bc04dace10
@@ -1013,10 +1075,44 @@ components:
           type: string
           minLength: 2
           pattern: '^[a-zA-Z0-9][a-zA-Z0-9_.-]+$'
-          description: Unique new room name; existing rooms or storage are never replaced.
+          description: Unique new deployment name. Forks a new independent durable profile; retained profiles with the same name are not replaced.
+    BrowserProfile:
+      type: object
+      required: [id, name, created]
+      properties:
+        id:
+          type: string
+          description: Stable profile ID, independent of deployment names and container IDs.
+        name:
+          type: string
+          description: Human-readable profile name.
+        created:
+          type: string
+          format: date-time
+        room_id:
+          type: string
+          description: Bound deployment ID; absent when available.
+        room_name:
+          type: string
+          description: Bound deployment name; stopped deployments still reserve the profile.
+    ProfileCreateRequest:
+      type: object
+      required: [name]
+      additionalProperties: false
+      properties:
+        name:
+          type: string
+          minLength: 1
+          maxLength: 120
     RoomSettings:
       type: object
       properties:
+        profile_id:
+          type: string
+          description: Durable profile binding. On creation choose an available profile, or omit to create a new durable profile automatically.
+        profile_name:
+          type: string
+          description: Profile display name; on creation names a new profile when profile_id is omitted. Defaults to the deployment name.
         api_version:
           type: number
           description: If not set, version is taken from neko_image. Relay and HTTP networking require version 3.

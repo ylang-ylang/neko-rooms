@@ -17,7 +17,24 @@ type RoomsConfig struct {
 	UsesMux        bool     `json:"uses_mux"`
 }
 
+type BrowserProfile struct {
+	ID       string    `json:"id"`
+	Name     string    `json:"name"`
+	Created  time.Time `json:"created"`
+	RoomID   string    `json:"room_id,omitempty"`
+	RoomName string    `json:"room_name,omitempty"`
+}
+
+type ProfileCreateRequest struct {
+	Name string `json:"name"`
+}
+
+var ErrProfileNotFound = fmt.Errorf("profile not found")
+var ErrProfileInUse = fmt.Errorf("profile is bound to a deployment; remove that deployment before reusing or deleting the profile")
+
 type RoomEntry struct {
+	ProfileID      string            `json:"profile_id,omitempty"`
+	ProfileName    string            `json:"profile_name,omitempty"`
 	ID             string            `json:"id"`
 	URL            string            `json:"url"`
 	Name           string            `json:"name"`
@@ -60,6 +77,9 @@ type RoomResources struct {
 }
 
 type RoomSettings struct {
+	ProfileID   string `json:"profile_id,omitempty"`
+	ProfileName string `json:"profile_name,omitempty"` // used only when creating a new profile
+
 	ApiVersion int `json:"api_version"`
 
 	Name           string `json:"name"`
@@ -224,6 +244,9 @@ type RoomCloneRequest struct {
 var ErrInvalidRoomSettings = fmt.Errorf("invalid room settings")
 
 type RoomManager interface {
+	ListProfiles(ctx context.Context) ([]BrowserProfile, error)
+	CreateProfile(ctx context.Context, name string) (*BrowserProfile, error)
+	DeleteProfile(ctx context.Context, id string) error
 	Config() RoomsConfig
 	List(ctx context.Context, labels map[string]string) ([]RoomEntry, error)
 	ExportAsDockerCompose(ctx context.Context) ([]byte, error)
@@ -231,6 +254,7 @@ type RoomManager interface {
 	ValidateSettings(ctx context.Context, settings RoomSettings) error
 	Create(ctx context.Context, settings RoomSettings) (string, error)
 	Clone(ctx context.Context, id string, name string) (*RoomEntry, error)
+	Recreate(ctx context.Context, id string, settings RoomSettings, start bool) (*RoomEntry, error)
 	GetEntry(ctx context.Context, id string) (*RoomEntry, error)
 	GetEntryByName(ctx context.Context, name string) (*RoomEntry, error)
 	GetSettings(ctx context.Context, id string) (*RoomSettings, error)

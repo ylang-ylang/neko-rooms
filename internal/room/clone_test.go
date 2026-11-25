@@ -92,12 +92,20 @@ func cloneFixture(t *testing.T, mode string) (*RoomManagerCtx, *fakeDocker, stri
 	settings.VideoMaxFPS, settings.VideoPipeline, settings.AudioPipeline, settings.BroadcastPipeline = 37, "custom-video", "custom-audio", "custom-broadcast"
 	settings.Resources = types.RoomResources{CPUShares: 512, NanoCPUs: 2500000000, ShmSize: 536870912, Memory: 1073741824}
 	settings.Hostname, settings.DNS = "explicit-hostname", []string{"192.0.2.53"}
-	root := filepath.Join(cfg.StorageInternal, privateStoragePath, settings.Name)
+	profile, err := manager.CreateProfile(context.Background(), settings.Name)
+	if err != nil {
+		t.Fatal(err)
+	}
+	settings.ProfileID = profile.ID
+	root := filepath.Join(cfg.StorageInternal, profileStoragePath, profile.ID)
 	writeSnapshotFixture(t, root, "profile/Default/Cookies", "persistent identity", 0640)
 	writeSnapshotFixture(t, root, "profile/Local State", "opaque profile identity", 0600)
 	writeSnapshotFixture(t, root, "Downloads/download", "download", 0600)
 	id, err := manager.Create(context.Background(), settings)
 	if err != nil {
+		t.Fatal(err)
+	}
+	if err := manager.Start(context.Background(), id); err != nil {
 		t.Fatal(err)
 	}
 	return manager, fake, id, root
@@ -124,6 +132,7 @@ func TestClonePreservesConfigurationAndIsolatedManagedStorage(t *testing.T) {
 				t.Fatal(err)
 			}
 			original.Name = "target"
+			original.ProfileID, original.ProfileName = cloned.ProfileID, cloned.ProfileName
 			if !reflect.DeepEqual(cloned, original) {
 				t.Fatal("canonical source configuration did not survive cloning")
 			}
@@ -138,11 +147,11 @@ func TestClonePreservesConfigurationAndIsolatedManagedStorage(t *testing.T) {
 				t.Fatal("direct clone did not allocate unique published ports")
 			}
 			for _, mount := range payloads[1].HostConfig.Mounts {
-				if !strings.Contains(mount.Source, "/rooms/target/") || strings.Contains(mount.Source, "/rooms/source/") {
+				if !strings.Contains(mount.Source, "/profiles/"+entry.ProfileID+"/") || strings.Contains(mount.Source, sourceRoot+"/") {
 					t.Fatal("clone reused source writable mount")
 				}
 			}
-			targetRoot := filepath.Join(manager.config.StorageInternal, privateStoragePath, "target")
+			targetRoot := filepath.Join(manager.config.StorageInternal, profileStoragePath, entry.ProfileID)
 			writeSnapshotFixture(t, targetRoot, "profile/Default/Cookies", "target changed", 0640)
 			data, _ := os.ReadFile(filepath.Join(sourceRoot, "profile/Default/Cookies"))
 			if string(data) != "persistent identity" {
@@ -265,7 +274,7 @@ func TestCloneFailuresResumeAndRollbackOnlyOwnedTarget(t *testing.T) {
 	}
 }
 
-func TestCloneRejectsNamesStorageCollisionsAndExternalWritableMounts(t *testing.T) {
+func TestCloneKeepsOrphanStorageAndRejectsExternalWritableMounts(t *testing.T) {
 	manager, fake, source, _ := cloneFixture(t, config.NetworkModeRelay)
 	for _, name := range []string{"", "x", "../escape", "new room"} {
 		if _, err := manager.Clone(context.Background(), source, name); !errors.Is(err, types.ErrInvalidRoomSettings) {
@@ -277,8 +286,9 @@ func TestCloneRejectsNamesStorageCollisionsAndExternalWritableMounts(t *testing.
 	}
 	target := filepath.Join(manager.config.StorageInternal, privateStoragePath, "target")
 	writeSnapshotFixture(t, target, "keep", "existing target", 0600)
-	if _, err := manager.Clone(context.Background(), source, "target"); !errors.Is(err, types.ErrRoomNameConflict) {
-		t.Fatal("existing storage did not return conflict")
+	fakeCloneBrowser(t, manager)
+	if entry, err := manager.Clone(context.Background(), source, "target"); err != nil || entry.ProfileID == "" {
+		t.Fatal("orphaned profile incorrectly prevented an independent new profile")
 	}
 	data, _ := os.ReadFile(filepath.Join(target, "keep"))
 	if string(data) != "existing target" {
@@ -295,7 +305,7 @@ func TestCloneRejectsNamesStorageCollisionsAndExternalWritableMounts(t *testing.
 	}
 	fake.mu.Lock()
 	defer fake.mu.Unlock()
-	if len(fake.created) != 1 {
+	if len(fake.created) != 2 {
 		t.Fatal("invalid clone reached Docker create")
 	}
 }
