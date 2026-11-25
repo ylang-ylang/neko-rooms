@@ -522,6 +522,22 @@ class ConfigurationTests(unittest.TestCase):
         self.assertEqual(env["NEKO_ROOMS_STORAGE_EXTERNAL"], str(self.state / "storage"))
         self.assertTrue(project["networks"]["rooms"]["external"])
 
+    def test_custom_cdp_image_is_identical_in_payload_and_owner_allowlist(self):
+        if not shutil.which("docker") or subprocess.run(["docker", "compose", "version"], capture_output=True).returncode:
+            self.skipTest("Docker Compose unavailable; default image contracts still run")
+        self.values["ROOM_IMAGE"] = "local-native-cdp:isolated-build"
+        self.write_settings()
+        self.configure()
+        request = json.loads((self.state / "room-request.json").read_text())
+        environment = {k: v for k, v in os.environ.items() if k not in demo.COMPOSE_KEYS}
+        result = subprocess.run(demo.compose_command(self.state, ["config", "--format", "json"]),
+                                env=environment, capture_output=True, text=True)
+        self.assertEqual(result.returncode, 0, "Compose config rejected custom image (output withheld)")
+        project = json.loads(result.stdout.replace("$$", "$"))
+        allowed = project["services"]["neko-rooms"]["environment"]["NEKO_ROOMS_NEKO_IMAGES"]
+        self.assertEqual(request["neko_image"], self.values["ROOM_IMAGE"])
+        self.assertEqual(allowed, request["neko_image"])
+
     def test_actual_lan_compose_keeps_native_relay_one_tcp_port_and_literal_auth(self):
         if not shutil.which("docker") or subprocess.run(["docker", "compose", "version"], capture_output=True).returncode:
             self.skipTest("Docker Compose unavailable; source-only contracts still run")

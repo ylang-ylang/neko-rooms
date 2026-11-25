@@ -2,7 +2,7 @@
 
 Open **`https://neko.localhost:8443/manage/`**, create a room, then use **`https://neko.localhost:8443/room/native/`**. For another device on your LAN, use the [direct-IP configuration below](#direct-lan-access-without-ssh). The viewer is the room image's **original Neko 3.2 UI and WebRTC**, including its native controls, audio, clipboard and other features. No copied frontend, MSE player, `aggregate.html`, or Manager `http` mode is used.
 
-This is a **fresh, local, single-Docker-host example** in the Manager project. It does not modify an existing installation, NAS, Neko server, room image or management UI. [The two-port example](../relay/) remains separate.
+This is a **fresh, local, single-Docker-host example** in the Manager project. Its [room deployment adapter](room-cdp/) derives from the pinned official Neko image to enable CDP on the **same headed Chromium** and add a private relay. Neko's core binary, frontend, native controls and WebRTC stay upstream; the deployment image is **not byte-identical** to the official image. No existing installation or NAS is modified. [The two-port example](../relay/) remains separate.
 
 ```text
 one published TCP socket: <chosen-bind>:8443 -> gateway:443
@@ -22,10 +22,10 @@ Modern browsers advertise **HTTP ALPN** (`h2` / `http/1.1`) even for an IP-only 
 
 - Local Linux Docker Engine and Unix socket, Docker Compose **2.30+** (`env_file.format: raw`), Python **3.9+**, OpenSSL **3+**.
 - A manager image built from **this checkout's `Dockerfile`**, supplied explicitly as `MANAGER_IMAGE`. The sample never assumes a NAS-specific image is available; `pull_policy: never` makes a missing build fail visibly.
-- Official Neko Chromium **3.2.0**, pinned by digest below. The generated owner image allowlist and sample room payload use the **same** `ROOM_IMAGE` input.
+- The local **CDP-enabled room deployment image**, built below from official Neko Chromium **3.2.0** pinned by digest. The generated owner image allowlist and sample room payload use the **same** `ROOM_IMAGE` input, including when you choose a custom build tag.
 - Official Nginx **1.30.7-alpine** and coturn **4.6.3**, both pinned by digest in `compose.yaml`. Check the pinned Nginx binary's compiled stream, stream TLS and SSL-preread modules with `nginx -V`, then test the complete mounted config with `nginx -t` as below. Nginx and coturn are permissively licensed.
 
-## 1. Choose an explicit, dedicated bridge and build the manager
+## 1. Choose an explicit, dedicated bridge and build both images
 
 From the repository root, inspect the **local machine** before choosing a subnet:
 
@@ -47,8 +47,10 @@ docker network create --driver bridge --subnet "$ROOM_NETWORK_CIDR" \
   --ip-range "$ROOM_DYNAMIC_CIDR" "$ROOM_NETWORK"
 
 docker build -t neko-rooms-single-port:local .
-docker pull ghcr.io/m1k1o/neko/chromium:3.2.0@sha256:270face8b8111e639744fb7bcdbbf0deed227900bb89d58b2f8adfc12af8c41e
+docker build -t neko-single-port-chromium-cdp:3.2.0-1 examples/single-port-relay/room-cdp
 ```
+
+Builds must complete on the **same Docker daemon** Manager will use. Keep `ROOM_IMAGE=neko-single-port-chromium-cdp:3.2.0-1` in the private settings below; if you build another tag, set that exact tag there before configure. The stock upstream image alone has neither CDP flags nor the relay. Manager does not install them or pull missing room images.
 
 `demo.py` **never creates or selects a network**. It requires the explicitly supplied bridge, validates its actual CIDR/gateway/address occupancy, and refuses mismatches. Coturn must share the room bridge: the browser's relayed traffic and the room's return traffic must reach each other's **private** IPs. This example does not provision split-host routes or tunnels.
 
@@ -60,7 +62,8 @@ No public domain or pre-existing certificate is needed. The default setup binds 
 mkdir -p "${XDG_CACHE_HOME:-$HOME/.cache}"
 PRIVATE=$(mktemp -d "${XDG_CACHE_HOME:-$HOME/.cache}/neko-single-port.XXXXXX")
 install -m 600 examples/single-port-relay/.env.example "$PRIVATE/settings.env"
-# Edit this private file. Set MANAGER_IMAGE=neko-rooms-single-port:local and the
+# Edit this private file. Set MANAGER_IMAGE=neko-rooms-single-port:local,
+# ROOM_IMAGE to the exact built CDP adapter tag, and the
 # exact ROOM_NETWORK, ROOM_NETWORK_CIDR, TURN_PRIVATE_IP chosen above.
 # INSTANCE_NAME must be unique; do not run two states for the same instance.
 "${EDITOR:-vi}" "$PRIVATE/settings.env"
@@ -158,13 +161,25 @@ Do not share `dc config`, `docker inspect` environment dumps, generated payloads
 The steps below show loopback URLs; in LAN mode, use the IP URLs above instead.
 
 1. Open **`https://neko.localhost:8443/manage/`**. Privately read `credentials.json` in an editor and sign into the **existing Owner form** using `owner_username` / `owner_password`. No global Basic-auth or substitute login UI is added.
-2. Create room **`native`**, API **3**, selecting the pinned allowed image. Enter the saved `room_user_password` / `room_admin_password` as its native user/admin passwords; keep the normal separate Profile and Downloads private mounts. `room-request.json` has those settings for clients using the **existing authenticated Owner API** (`POST /manage/api/rooms`, then the usual room-start API). Creation/start are not done by configure or `up`.
+2. Create room **`native`**, API **3**, selecting the built CDP adapter image. Enter the saved `room_user_password` / `room_admin_password` as its native user/admin passwords; keep the normal separate Profile and Downloads private mounts. `room-request.json` has those settings for clients using the **existing authenticated Owner API** (`POST /manage/api/rooms`, then the usual room-start API). Creation/start are not done by configure or `up`.
 3. Use **`https://neko.localhost:8443/room/native/`** and log in with a display name plus a native room password. This path is proxied by Manager to the original Neko page, signaling and WebRTC. Owner cookies and Agent keys do not substitute for native viewer authentication. Native host control, keyboard/mouse, audio, clipboard and other room features remain Neko-owned.
 4. Check browser WebRTC diagnostics for a selected **relay** candidate and advancing decoded video/audio. A certificate handshake, successful login or loaded HTML alone is **not media proof**. Separately exercise the native controls/features you need.
 
-Manager stays `NEKO_ROOMS_NETWORK_MODE=relay`, not `http`. Its existing private/full-ICE policy and Neko 3.2 native-YAML startup adapter suppress public-IP discovery without changing the official room image. Only newly created/recreated rooms receive that policy. Do not point this sample at existing rooms/credentials/data.
+Manager stays `NEKO_ROOMS_NETWORK_MODE=relay`, not `http`. Its existing private/full-ICE policy and Neko 3.2 native-YAML startup adapter suppress public-IP discovery; the room deployment adapter leaves this startup mechanism intact. Only newly created/recreated rooms receive those settings. Do not point this sample at existing rooms/credentials/data.
 
-Owner mutations must keep the exact HTTPS **Origin, including port**. Gateway forwarding preserves Host, HTTPS scheme, Authorization and WebSocket upgrades, so the existing Owner Secure-cookie and Agent Bearer boundaries remain in place. `/rooms/` never receives a gateway login challenge. **The stock official room image does not include this fork's CDP relay**: Agent authentication/routes remain unchanged, but actual CDP requires an explicitly selected compatible relay-enabled image; it is not supplied by this native TURN demo.
+Owner mutations must keep the exact HTTPS **Origin, including port**. Gateway forwarding preserves Host, HTTPS scheme, Authorization and WebSocket upgrades, so the existing Owner Secure-cookie and Agent Bearer boundaries remain in place. `/rooms/` never receives a gateway login challenge.
+
+### Agent CDP uses the same native browser
+
+Use the Owner room list's **Agent** action to issue a temporary, room-name-bound key. Use its generated client snippet and CDP URL with **`Authorization: Bearer …`**, through the same gateway HTTPS port (`/rooms/<name>/json/version`, `/rooms/<name>/devtools/…`). Owner cookies and native room passwords do not authenticate CDP. Reuse the existing browser context and tabs; do not launch another browser, create another profile or call `Browser.close` when disconnecting. Neko control ownership does not serialize CDP input: coordinate human/agent handoff explicitly.
+
+The adapter makes only these deployment changes:
+
+- Preserve the original supervisor Chromium/Openbox launch and all its other flags; set that **one headed process's** profile to the sample's existing private mount **`/home/neko/profile`**, and add `--remote-debugging-address=127.0.0.1 --remote-debugging-port=9222`. The official launcher uses `/home/neko/.config/chromium`; existing data there is **not migrated** by configure or an image rebuild. Recreate only an intended sample room; a changed image does not enable CDP in an already-running browser.
+- Enable `DeveloperToolsAvailability` and `RemoteDebuggingAllowed` in the existing managed policy, preserving unrelated policies. Upstream core, UI, healthcheck and image command remain unchanged.
+- Supervise the packaged **socat** relay on **9223 inside the room's Docker network** to loopback 9222. Neither port is host-published. No `--remote-allow-origins=*` or alternate viewer is added. The relay preserves request bytes, including Chromium's Host/Origin checks. Manager authenticates the external Bearer connection, supplies loopback Host and creates its own upstream handshake without forwarding the external Origin or credentials.
+
+The private bridge is trusted: unauthenticated CDP is reachable by its members on 9223, so attach only this dedicated deployment's trusted services/rooms. Internet clients must use Manager's name-bound temporary key, never direct CDP, a published relay, or a room password. Manager's existing key expiry/revocation closes active sockets and cross-room keys are rejected; changing the room image does not replace that gate.
 
 For a transport-only check of the mandatory no-SNI TURN branch in loopback mode (certificate verification is still enabled):
 
@@ -194,7 +209,7 @@ python3 -B -m unittest discover -s examples/single-port-relay -p 'test_*.py' -v
 python3 examples/single-port-relay/demo.py down --state-dir "$STATE"
 ```
 
-The stdlib tests use temporary private files, a fake Unix socket and mocked Docker network inspection; when Compose is installed they also parse the **actual Compose file** without starting services. They check one TCP publication, identical public URI ports, HTTP ALPN/legacy SNI/default TURN routing, explicit LAN/hostname flags, private upstreams, raw secret/path characters, native mode/image/payload, mixed DNS/IP SAN validation, leaf-only renewal, certificate-only bootstrap, state permissions and idempotency. They do **not** claim container/media/browser acceptance or change/pull/build any runtime image.
+The stdlib tests use temporary private files, a fake Unix socket and mocked Docker network inspection; when Compose is installed they also parse the **actual Compose file** without starting services. They check one TCP publication, identical public URI ports, HTTP ALPN/legacy SNI/default TURN routing, explicit LAN/hostname flags, private upstreams, raw secret/path characters, native mode/image/payload, mixed DNS/IP SAN validation, leaf-only renewal, certificate-only bootstrap, state permissions and idempotency. Additional adapter tests check preservation of native Chromium argv and unrelated policies, loopback CDP, supervised byte-preserving relay, no added entrypoint/host publication, and custom room-image equality between the creation payload and Manager allowlist. These tests do **not** claim container/media/browser acceptance or change/pull/build any runtime image.
 
 `down` removes only this Compose project's services. Manager-created rooms are **not Compose services** and are not automatically deleted; storage, private state and the explicitly supplied external network are retained. Remove only your own now-unused bridge and browser CA trust when finished. Restarting Manager invalidates its existing in-memory Owner sessions and Agent keys.
 

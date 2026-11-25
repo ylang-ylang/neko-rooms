@@ -15,7 +15,7 @@ import tempfile
 
 HERE = Path(__file__).resolve().parent
 ROOT = HERE.parent.parent
-ROOM_IMAGE = "ghcr.io/m1k1o/neko/chromium:3.2.0@sha256:270face8b8111e639744fb7bcdbbf0deed227900bb89d58b2f8adfc12af8c41e"
+ROOM_IMAGE = "neko-single-port-chromium-cdp:3.2.0-1"
 PRIVATE_RANGES = tuple(ipaddress.ip_network(c) for c in ("10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16"))
 DEFAULTS = {
     "APP_HOST": "neko.localhost", "TURN_HOST": "turn.localhost", "PUBLIC_PORT": "8443",
