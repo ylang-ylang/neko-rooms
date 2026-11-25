@@ -122,15 +122,10 @@ func (manager *RoomManagerCtx) Clone(ctx context.Context, id, name string) (entr
 
 	var cookies []map[string]json.RawMessage
 	var localStorage []*cloneFrame
-	if source.State.Running && !source.State.Paused {
-		// Read before freezing Chrome: it cannot answer CDP while paused.
-		cookies, err = manager.snapshotCookies(ctx, source.ID[:12]+":9223")
+	if source.State.Running {
+		cookies, localStorage, err = manager.snapshotLiveIdentity(ctx, source)
 		if err != nil {
-			return nil, fmt.Errorf("capture live browser identity: %w", err)
-		}
-		localStorage, err = manager.snapshotLocalStorage(ctx, source.ID[:12]+":9223")
-		if err != nil {
-			return nil, fmt.Errorf("capture active browser storage: %w", err)
+			return nil, err
 		}
 	}
 	if err := manager.snapshotSource(ctx, source, sourceRoot, staging); err != nil {
@@ -251,4 +246,38 @@ func (manager *RoomManagerCtx) validateCloneMounts(source *dockerContainer.Inspe
 		return fmt.Errorf("%w: source has no managed persistent mounts", types.ErrInvalidRoomSettings)
 	}
 	return nil
+}
+
+// An already-paused Chrome can still have unflushed cookies/localStorage.
+// Briefly resume only for read-only CDP, then restore paused state before the
+// filesystem snapshot. The original paused state is recovered on every error.
+func (manager *RoomManagerCtx) snapshotLiveIdentity(ctx context.Context, source *dockerContainer.InspectResponse) (cookies []map[string]json.RawMessage, storage []*cloneFrame, resultErr error) {
+	if err := ctx.Err(); err != nil {
+		return nil, nil, err
+	}
+	if source.State.Paused {
+		resumeCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
+		resumeErr := manager.client.ContainerUnpause(resumeCtx, source.ID)
+		cancel()
+		defer func() {
+			pauseCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
+			defer cancel()
+			if err := manager.client.ContainerPause(pauseCtx, source.ID); err != nil {
+				resultErr = errors.Join(resultErr, errors.New("failed to restore original paused source state"))
+			}
+		}()
+		if resumeErr != nil {
+			return nil, nil, errors.New("cannot briefly resume paused source to capture browser identity")
+		}
+	}
+	address := source.ID[:12] + ":9223"
+	storage, err := manager.snapshotLocalStorage(ctx, address)
+	if err != nil {
+		return nil, nil, fmt.Errorf("capture active browser storage: %w", err)
+	}
+	cookies, err = manager.snapshotCookies(ctx, address)
+	if err != nil {
+		return nil, nil, fmt.Errorf("capture live browser identity: %w", err)
+	}
+	return cookies, storage, nil
 }

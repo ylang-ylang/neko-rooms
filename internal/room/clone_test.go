@@ -13,6 +13,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/gorilla/websocket"
 
@@ -25,6 +26,7 @@ type cloneBrowser struct {
 	methods []string
 	applied []map[string]json.RawMessage
 	failSet bool
+	failGet bool
 }
 
 func fakeCloneBrowser(t *testing.T, manager *RoomManagerCtx) *cloneBrowser {
@@ -52,7 +54,7 @@ func fakeCloneBrowser(t *testing.T, manager *RoomManagerCtx) *cloneBrowser {
 			browser.mu.Lock()
 			browser.methods = append(browser.methods, request.Method)
 			result := any(map[string]any{})
-			failure := request.Method == "Storage.setCookies" && browser.failSet
+			failure := (request.Method == "Storage.setCookies" && browser.failSet) || (request.Method == "Storage.getCookies" && browser.failGet)
 			switch request.Method {
 			case "Storage.getCookies":
 				result = map[string]any{"cookies": []any{map[string]any{"name": "session", "value": "private-marker", "domain": "site.test", "path": "/", "secure": true, "httpOnly": true, "sameSite": "Lax", "priority": "High", "sourceScheme": "Secure", "sourcePort": 443, "session": true, "expires": -1, "size": 20, "partitionKey": map[string]any{"topLevelSite": "https://site.test", "hasCrossSiteAncestor": false}}, map[string]any{"name": "persistent", "value": "opaque-marker", "domain": "site.test", "path": "/", "session": false, "expires": 1900000000}}}
@@ -147,7 +149,7 @@ func TestClonePreservesConfigurationAndIsolatedManagedStorage(t *testing.T) {
 				t.Fatal("clone writes mutated source data")
 			}
 			browser.mu.Lock()
-			if !reflect.DeepEqual(browser.methods, []string{"Storage.getCookies", "Target.getBrowserContexts", "Target.getTargets", "Storage.clearCookies", "Storage.setCookies"}) || len(browser.applied) != 2 {
+			if !reflect.DeepEqual(browser.methods, []string{"Target.getBrowserContexts", "Target.getTargets", "Storage.getCookies", "Storage.clearCookies", "Storage.setCookies"}) || len(browser.applied) != 2 {
 				t.Fatal("clone did not supplement identity in existing default contexts")
 			}
 			session, persistent := browser.applied[0], browser.applied[1]
@@ -170,6 +172,7 @@ func TestCloneRetainsStoppedAndAlreadyPausedSourceState(t *testing.T) {
 	for _, paused := range []bool{false, true} {
 		t.Run(map[bool]string{false: "stopped", true: "paused"}[paused], func(t *testing.T) {
 			manager, fake, source, _ := cloneFixture(t, config.NetworkModeRelay)
+			fakeCloneBrowser(t, manager)
 			fake.mu.Lock()
 			for id, c := range fake.containers {
 				c.State.Running, c.State.Paused = paused, paused
@@ -182,9 +185,24 @@ func TestCloneRetainsStoppedAndAlreadyPausedSourceState(t *testing.T) {
 			}
 			fake.mu.Lock()
 			defer fake.mu.Unlock()
+			pauses, resumes := 0, 0
 			for _, request := range fake.requests {
-				if strings.HasSuffix(request, "/pause") || strings.HasSuffix(request, "/unpause") || strings.HasSuffix(request, "/stop") {
-					t.Fatal("originally paused/stopped source was changed")
+				if strings.HasSuffix(request, "/pause") {
+					pauses++
+				}
+				if strings.HasSuffix(request, "/unpause") {
+					resumes++
+				}
+				if strings.HasSuffix(request, "/stop") {
+					t.Fatal("source browser was stopped")
+				}
+			}
+			if (paused && (pauses != 1 || resumes != 1)) || (!paused && (pauses != 0 || resumes != 0)) {
+				t.Fatal("paused identity capture did not resume/re-pause exactly once, or stopped source was changed")
+			}
+			for id, c := range fake.containers {
+				if strings.HasPrefix(id, source) && (c.State.Paused != paused || c.State.Running != paused) {
+					t.Fatal("source original lifecycle state was not restored")
 				}
 			}
 		})
@@ -279,5 +297,99 @@ func TestCloneRejectsNamesStorageCollisionsAndExternalWritableMounts(t *testing.
 	defer fake.mu.Unlock()
 	if len(fake.created) != 1 {
 		t.Fatal("invalid clone reached Docker create")
+	}
+}
+
+func TestCloneSerializesSourceDeletionAndTargetNameReservation(t *testing.T) {
+	manager, fake, source, _ := cloneFixture(t, config.NetworkModeRelay)
+	fakeCloneBrowser(t, manager)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	paused, release := make(chan struct{}), make(chan struct{})
+	var pauseOnce, releaseOnce sync.Once
+	defer releaseOnce.Do(func() { close(release) })
+	fake.onAction = func(action string) {
+		if action == "pause" {
+			pauseOnce.Do(func() {
+				close(paused)
+				<-release
+			})
+		}
+	}
+	cloned := make(chan error, 1)
+	go func() {
+		_, err := manager.Clone(ctx, source, "target")
+		cloned <- err
+	}()
+	select {
+	case <-paused:
+	case <-ctx.Done():
+		t.Fatal("clone did not reach its snapshot")
+	}
+	if manager.lifecycle.TryLock() {
+		manager.lifecycle.Unlock()
+		t.Fatal("clone snapshot does not own the shared lifecycle lock")
+	}
+	removed := make(chan error, 1)
+	go func() { removed <- manager.Remove(ctx, source) }()
+	releaseOnce.Do(func() { close(release) })
+	if err := <-cloned; err != nil {
+		t.Fatalf("concurrent source deletion interrupted clone: %v", err)
+	}
+	if err := <-removed; err != nil {
+		t.Fatal(err)
+	}
+	entry, err := manager.GetEntryByName(ctx, "target")
+	if err != nil || !entry.Running {
+		t.Fatal("serialized source removal destroyed the clone")
+	}
+	// Two simultaneous clones of one remaining source cannot claim the same
+	// name, even though both requests began before that target existed.
+	results := make(chan error, 2)
+	for range 2 {
+		go func() {
+			_, err := manager.Clone(ctx, entry.ID, "same-name")
+			results <- err
+		}()
+	}
+	first, second := <-results, <-results
+	if !((first == nil && errors.Is(second, types.ErrRoomNameConflict)) || (second == nil && errors.Is(first, types.ErrRoomNameConflict))) {
+		t.Fatalf("concurrent target name reservation failed: %v / %v", first, second)
+	}
+}
+
+func TestPausedCloneFailureRestoresOriginalPause(t *testing.T) {
+	for _, canceled := range []bool{false, true} {
+		t.Run(map[bool]string{false: "CDP failure", true: "client cancellation"}[canceled], func(t *testing.T) {
+			manager, fake, source, _ := cloneFixture(t, config.NetworkModeRelay)
+			browser := fakeCloneBrowser(t, manager)
+			browser.failGet = !canceled
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			fake.mu.Lock()
+			for id, c := range fake.containers {
+				c.State.Paused, c.State.Status = true, "paused"
+				fake.containers[id] = c
+			}
+			fake.onAction = func(action string) {
+				if action == "unpause" && canceled {
+					cancel()
+				}
+			}
+			fake.mu.Unlock()
+			if _, err := manager.Clone(ctx, source, "target"); err == nil {
+				t.Fatal("paused identity failure was hidden")
+			}
+			fake.mu.Lock()
+			defer fake.mu.Unlock()
+			if len(fake.containers) != 1 {
+				t.Fatal("paused-source failure created an orphan clone")
+			}
+			for _, c := range fake.containers {
+				if !c.State.Paused || !c.State.Running {
+					t.Fatal("paused source was left running/unpaused after failure")
+				}
+			}
+		})
 	}
 }

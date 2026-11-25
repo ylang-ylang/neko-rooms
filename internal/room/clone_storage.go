@@ -15,8 +15,9 @@ import (
 
 type cloneFrame struct {
 	Frame struct {
-		ID     string `json:"id"`
-		Origin string `json:"securityOrigin"`
+		ID       string `json:"id"`
+		ParentID string `json:"parentId"`
+		Origin   string `json:"securityOrigin"`
 	} `json:"frame"`
 	Children []*cloneFrame `json:"childFrames"`
 	Entries  json.RawMessage
@@ -49,6 +50,7 @@ func (manager *RoomManagerCtx) snapshotLocalStorage(ctx context.Context, address
 	}
 	sessions := map[string]string{}
 	pages := []*cloneFrame{}
+	iframes := []*cloneFrame{}
 	for _, target := range targets.Infos {
 		if target.Type != "page" && target.Type != "iframe" {
 			continue
@@ -75,7 +77,13 @@ func (manager *RoomManagerCtx) snapshotLocalStorage(ctx context.Context, address
 		sessions[result.Tree.Frame.ID] = attached.ID
 		if target.Type == "page" {
 			pages = append(pages, result.Tree)
+		} else {
+			iframes = append(iframes, result.Tree)
 		}
+	}
+	pages, err = mergeStorageFrames(pages, iframes)
+	if err != nil {
+		return nil, err
 	}
 	var capture func(*cloneFrame, string) error
 	capture = func(frame *cloneFrame, session string) error {
@@ -246,4 +254,56 @@ func (browser *browserCDP) restoreStoragePage(ctx context.Context, page *cloneFr
 		return errors.New("target rejected active localStorage restoration")
 	}
 	return nil
+}
+
+// Page.getFrameTree omits OOPIF children on site-isolated Chrome. Each iframe
+// target supplies its own tree; merge by actual frame/parent IDs, not by origin
+// (one origin can occupy several different partitioned storage areas).
+func mergeStorageFrames(pages, iframes []*cloneFrame) ([]*cloneFrame, error) {
+	nodes := map[string]*cloneFrame{}
+	children := map[string][]string{}
+	var collect func(*cloneFrame, string)
+	collect = func(frame *cloneFrame, parent string) {
+		if frame.Frame.ParentID != "" {
+			parent = frame.Frame.ParentID
+		}
+		nodes[frame.Frame.ID] = frame
+		if parent != "" {
+			found := false
+			for _, id := range children[parent] {
+				found = found || id == frame.Frame.ID
+			}
+			if !found {
+				children[parent] = append(children[parent], frame.Frame.ID)
+			}
+		}
+		for _, child := range frame.Children {
+			collect(child, frame.Frame.ID)
+		}
+	}
+	for _, page := range pages {
+		collect(page, "")
+	}
+	for _, iframe := range iframes {
+		collect(iframe, "")
+	}
+	for _, iframe := range iframes {
+		if nodes[iframe.Frame.ParentID] == nil {
+			return nil, errors.New("cannot associate active iframe storage with its parent")
+		}
+	}
+	var link func(string) *cloneFrame
+	link = func(id string) *cloneFrame {
+		copy := *nodes[id]
+		copy.Children = nil
+		for _, child := range children[id] {
+			copy.Children = append(copy.Children, link(child))
+		}
+		return &copy
+	}
+	merged := make([]*cloneFrame, 0, len(pages))
+	for _, page := range pages {
+		merged = append(merged, link(page.Frame.ID))
+	}
+	return merged, nil
 }

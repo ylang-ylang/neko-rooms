@@ -13,6 +13,7 @@ import (
 	"os"
 	"os/exec"
 	"strings"
+	"sync/atomic"
 	"syscall"
 	"testing"
 	"time"
@@ -29,9 +30,36 @@ func TestCloneChromiumFreshIdentity(t *testing.T) {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
 	defer cancel()
-	origin := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	var unexpectedNetwork atomic.Int32
+	child := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasPrefix(r.URL.Path, "/.neko-clone/") {
+			unexpectedNetwork.Add(1)
+		}
 		w.Header().Set("Content-Type", "text/html")
-		w.Write([]byte("<!doctype html><title>Disposable clone identity fixture</title>"))
+		seed := ""
+		if r.URL.Query().Has("seed") {
+			seed = "localStorage.setItem('partition-marker','source-account');"
+		}
+		w.Write([]byte("<!doctype html><script>" + seed + "parent.postMessage({partitioned:localStorage.getItem('partition-marker')==='source-account'},'*')</script>"))
+	}))
+	defer child.Close()
+	childOrigin := strings.Replace(child.URL, "127.0.0.1", "localhost", 1)
+	origin := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasPrefix(r.URL.Path, "/.neko-clone/") {
+			unexpectedNetwork.Add(1)
+		}
+		if r.URL.Path == "/identity" {
+			persistent, pErr := r.Cookie("fresh-persistent")
+			session, sErr := r.Cookie("fresh-session")
+			json.NewEncoder(w).Encode(pErr == nil && sErr == nil && persistent.Value == "source-account" && session.Value == "source-account")
+			return
+		}
+		query := ""
+		if r.URL.Query().Has("seed") {
+			query = "?seed"
+		}
+		w.Header().Set("Content-Type", "text/html")
+		w.Write([]byte("<!doctype html><title>Disposable clone identity fixture</title><script>window.partitionedReady=new Promise(resolve=>addEventListener('message',e=>{if(e.data&&'partitioned' in e.data)resolve(e.data.partitioned)}));</script><iframe src='" + childOrigin + "/child" + query + "'></iframe>"))
 	}))
 	defer origin.Close()
 	source, target := t.TempDir(), t.TempDir()
@@ -41,7 +69,8 @@ func TestCloneChromiumFreshIdentity(t *testing.T) {
 	defer sourcePage.close()
 	// Runtime's awaited promise confirms the IndexedDB transaction committed,
 	// not merely that JS queued a write. Cookies are set immediately afterward.
-	cloneTestNavigate(t, ctx, sourcePage, origin.URL)
+	cloneTestNavigate(t, ctx, sourcePage, origin.URL+"/?seed")
+	cloneTestEvaluate(t, ctx, sourcePage, `window.partitionedReady`)
 	cloneTestEvaluate(t, ctx, sourcePage, `(async()=>{localStorage.setItem('clone-marker','source-account');await new Promise((resolve,reject)=>{const open=indexedDB.open('clone-fixture',1);open.onupgradeneeded=()=>open.result.createObjectStore('identity');open.onerror=()=>reject(open.error);open.onsuccess=()=>{const db=open.result;const tx=db.transaction('identity','readwrite');tx.objectStore('identity').put('source-account','account');tx.oncomplete=()=>{db.close();resolve()};tx.onerror=()=>reject(tx.error)}});return true})()`)
 	if err := sourcePage.call(ctx, "Network.setCookies", map[string]any{"cookies": []any{
 		map[string]any{"name": "fresh-persistent", "value": "source-account", "url": origin.URL, "httpOnly": true, "sameSite": "Lax", "expires": float64(time.Now().Add(time.Hour).Unix())},
@@ -57,6 +86,16 @@ func TestCloneChromiumFreshIdentity(t *testing.T) {
 	storage, err := manager.snapshotLocalStorage(ctx, sourceAddress)
 	if err != nil {
 		t.Fatal(err)
+	}
+	var describe func(*cloneFrame)
+	describe = func(frame *cloneFrame) {
+		t.Logf("captured frame origin=%s children=%d entriesBytes=%d", frame.Frame.Origin, len(frame.Children), len(frame.Entries))
+		for _, child := range frame.Children {
+			describe(child)
+		}
+	}
+	for _, page := range storage {
+		describe(page)
 	}
 	if err := syscall.Kill(-sourcePID, syscall.SIGSTOP); err != nil {
 		t.Fatal(err)
@@ -83,6 +122,9 @@ func TestCloneChromiumFreshIdentity(t *testing.T) {
 	if err := manager.restoreLocalStorage(ctx, targetAddress, storage); err != nil {
 		t.Fatal(err)
 	}
+	if unexpectedNetwork.Load() != 0 {
+		t.Fatal("controlled localStorage restoration contacted a website")
+	}
 	after, err := manager.snapshotCookies(ctx, targetAddress)
 	if err != nil || !hasFixtureCookie(after, "fresh-persistent") || !hasFixtureCookie(after, "fresh-session") {
 		t.Fatal("fresh persistent/HttpOnly/session cookies did not survive target startup and supplementation")
@@ -90,6 +132,12 @@ func TestCloneChromiumFreshIdentity(t *testing.T) {
 	targetPage := cloneTestPage(t, ctx, manager, targetAddress)
 	defer targetPage.close()
 	cloneTestNavigate(t, ctx, targetPage, origin.URL)
+	t.Run("HttpOnlyAccountIdentity", func(t *testing.T) {
+		cloneTestEvaluate(t, ctx, targetPage, `(async()=>await (await fetch('/identity')).json())()`)
+	})
+	t.Run("partitionedLocalStorage", func(t *testing.T) {
+		cloneTestEvaluate(t, ctx, targetPage, `window.partitionedReady`)
+	})
 	t.Run("localStorage", func(t *testing.T) {
 		cloneTestEvaluate(t, ctx, targetPage, `localStorage.getItem('clone-marker')==='source-account'`)
 	})
