@@ -20,6 +20,8 @@ Simple room management system for [n.eko](https://github.com/m1k1o/neko). Self h
 
 This fork adds temporary, per-room Chromium DevTools Protocol (CDP) access to the **same browser and tabs shown in Neko**, plus an **Agent** action in the room list. It does not launch a separate browser. The installation examples below use upstream images; build this fork's `Dockerfile` to include these features and the updated management UI.
 
+[Automated single-port releases](./docs/releasing.md) publish the fork's Manager and Chromium CDP adapter to Docker Hub, reusing the browser image when its inputs are unchanged. Push the release branch or run `python3 scripts/release.py publish`; publication never restarts existing rooms.
+
 ### Setup
 
 - Use a Chromium room image with CDP enabled on loopback port **9222** and a room-side relay listening on **9223**, reachable from the manager on the room's Docker network. The manager connects to the current room container's `:9223`; it does **not** install that relay or enable CDP for you. Do not expose the unauthenticated relay publicly.

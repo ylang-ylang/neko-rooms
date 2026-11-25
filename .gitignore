@@ -1,2 +1,5 @@
 .env
 bin
+/release.json
+/release.md
+/scripts/__pycache__/

@@ -4,6 +4,7 @@ import json
 from pathlib import Path
 import subprocess
 import tempfile
+from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
 
@@ -12,6 +13,9 @@ import release
 
 class PlanTests(unittest.TestCase):
     def setUp(self):
+        environment = patch.dict(release.os.environ, {"GITHUB_REPOSITORY": "", "DOCKERHUB_NAMESPACE": ""})
+        environment.start()
+        self.addCleanup(environment.stop)
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)
         self.root = Path(self.temp.name)
@@ -121,6 +125,240 @@ class PlanTests(unittest.TestCase):
         # Golden key protects aliases already published with the v1 algorithm.
         self.assertEqual(release.browser_key(inputs),
                          "58509fc55eca2f09a5f58e03026d63f562671b9dd9f2f50c3aa624dc4a728453")
+
+    def test_manager_only_plan_does_not_build_or_pull_existing_browser(self):
+        browser_tag = self.plan()["images"][1]["tag"]
+        self.put("manager.go", "package changed\n")
+        self.commit()
+        plan = self.plan()
+        with patch.object(release, "remote_digest", side_effect=lambda tag: "sha256:" + "b" * 64 if tag == browser_tag else None), \
+                patch.object(release.subprocess, "run") as run:
+            release.probe_plan(plan)
+            self.assertTrue(plan["images"][0]["build"])
+            self.assertFalse(plan["images"][1]["build"])
+            release.build_image(plan, plan["images"][1], self.root, "test-builder")
+            run.assert_not_called()
+
+    def test_first_publish_builds_missing_browser_and_rerun_preserves_immutable_manager(self):
+        with patch.object(release, "remote_digest", side_effect=["sha256:" + "a" * 64, None]):
+            plan = release.probe_plan(self.plan())
+        self.assertFalse(plan["images"][0]["build"])
+        self.assertTrue(plan["images"][1]["build"])
+        with patch.object(release, "remote_digest", return_value="sha256:" + "a" * 64), \
+                patch.object(release.subprocess, "run") as run:
+            release.build_image(plan, plan["images"][0], self.root, "test-builder")
+            run.assert_not_called()
+
+    def test_build_command_has_only_immutable_tag_and_scoped_remote_cache(self):
+        plan = self.plan()
+        for image in plan["images"]:
+            command = release.build_command(plan, image, self.root, "test-builder")
+            self.assertIn(image["tag"], command)
+            self.assertNotIn(image["channel"], command)
+            self.assertIn("linux/amd64", command)
+            self.assertIn(f"type=registry,ref={image['cache_ref']},mode=max", command)
+            self.assertEqual(command[-1], str(self.root / image["context"]))
+
+    def test_snapshot_excludes_dirty_source_untracked_files_and_git_metadata(self):
+        self.put("manager.go", "dirty source\n")
+        self.put("private.env", "DO_NOT_BUILD\n")
+        with release.snapshot(self.root, "HEAD") as source:
+            self.assertEqual((source / "manager.go").read_text(), "package main\n")
+            self.assertFalse((source / "private.env").exists())
+            self.assertFalse((source / ".git").exists())
+
+    def test_github_step_outputs_preserve_labels_and_boolean_build_flag(self):
+        with patch.object(release, "remote_digest", return_value=None):
+            plan = release.probe_plan(self.plan())
+        plan["images"] = plan["images"][:1]
+        output = self.root / "outputs"
+        release.emit_plan(plan, self.root / "plan.json", output)
+        fields = {}
+        lines = iter(output.read_text().splitlines())
+        for line in lines:
+            key, delimiter = line.split("<<", 1)
+            value = []
+            for content in lines:
+                if content == delimiter:
+                    break
+                value.append(content)
+            fields[key] = "\n".join(value)
+        self.assertEqual(fields["build"], "true")
+        self.assertEqual(fields["tag"], plan["images"][0]["tag"])
+        self.assertEqual(fields["labels"], plan["images"][0]["labels"])
+        self.assertEqual(fields["platform"], "linux/amd64")
+
+    def test_missing_artifact_prevents_any_channel_write(self):
+        plan = self.plan()
+        with patch.object(release, "remote_digest", side_effect=["sha256:" + "a" * 64, None]), \
+                patch.object(release.subprocess, "run") as run:
+            with self.assertRaisesRegex(RuntimeError, "missing immutable"):
+                release.promote(self.root, plan, self.root / "release.json")
+            run.assert_not_called()
+
+    def test_promotion_records_and_promotes_exact_pair_digests(self):
+        manager = "sha256:" + "a" * 64
+        browser = "sha256:" + "b" * 64
+        plan = self.plan()
+        output = self.root / "release.json"
+        with patch.object(release, "remote_digest", side_effect=[manager, browser]), \
+                patch.object(release.subprocess, "run") as run, patch("builtins.print"):
+            release.promote(self.root, plan, output)
+        manifest = json.loads(output.read_text())
+        self.assertTrue(manifest["channels_promoted"])
+        self.assertEqual(manifest["images"]["browser"]["digest"], browser)
+        self.assertEqual(manifest["images"]["manager"]["pinned"], plan["images"][0]["image"] + "@" + manager)
+        self.assertEqual(run.call_count, 2)
+        for call, image in zip(run.call_args_list, plan["images"]):
+            self.assertIn("--prefer-index=false", call.args[0])
+            self.assertIn(image["channel"], call.args[0])
+        self.assertIn(manifest["images"]["browser"]["pinned"], release.summary(manifest))
+
+    def test_failed_channel_write_leaves_manifest_unpromoted(self):
+        output = self.root / "release.json"
+        plan = self.plan()
+        with patch.object(release, "remote_digest", return_value="sha256:" + "a" * 64), \
+                patch.object(release.subprocess, "run", side_effect=subprocess.CalledProcessError(1, ["docker"])):
+            with self.assertRaises(subprocess.CalledProcessError):
+                release.promote(self.root, plan, output)
+        self.assertFalse(json.loads(output.read_text())["channels_promoted"])
+
+    def test_old_branch_tip_prevents_channel_write(self):
+        plan = self.plan()
+        with patch.object(release, "remote_digest", return_value="sha256:" + "a" * 64), \
+                patch.object(release, "git", return_value=b"older-sha\trefs/heads/main\n"), \
+                patch.object(release.subprocess, "run") as run:
+            with self.assertRaisesRegex(RuntimeError, "stale promotion"):
+                release.promote(self.root, plan, self.root / "release.json", expected_ref="refs/heads/main")
+            run.assert_not_called()
+
+    def publish_args(self, dry_run=False):
+        return SimpleNamespace(dry_run=dry_run, output=self.root / "release.json", builder="test-builder",
+                               summary=None, expected_ref=None)
+
+    def test_manual_dry_run_is_offline_and_has_no_build_side_effects(self):
+        plan = self.plan()
+        with patch.object(release, "remote_digest") as remote, patch.object(release.subprocess, "run") as run:
+            release.publish(self.root, plan, self.publish_args(dry_run=True))
+            remote.assert_not_called()
+            run.assert_not_called()
+        self.assertTrue(json.loads((self.root / "release.json").read_text())["dry_run"])
+
+    def test_manual_failed_checks_never_build_or_promote(self):
+        plan = self.plan()
+        with patch.object(release, "remote_digest", return_value=None), \
+                patch.object(release, "snapshot") as snapshot, \
+                patch.object(release.subprocess, "run"), \
+                patch.object(release, "check", side_effect=RuntimeError("check failed")), \
+                patch.object(release, "build_image") as build, patch.object(release, "promote") as promote:
+            snapshot.return_value.__enter__.return_value = self.root
+            with self.assertRaisesRegex(RuntimeError, "check failed"):
+                release.publish(self.root, plan, self.publish_args())
+            build.assert_not_called()
+            promote.assert_not_called()
+
+    def test_manual_failed_image_build_never_promotes(self):
+        plan = self.plan()
+        with patch.object(release, "remote_digest", return_value=None), \
+                patch.object(release, "snapshot") as snapshot, patch.object(release.subprocess, "run"), \
+                patch.object(release, "check"), patch.object(release, "ensure_builder"), \
+                patch.object(release, "build_image", side_effect=RuntimeError("build failed")), \
+                patch.object(release, "promote") as promote:
+            snapshot.return_value.__enter__.return_value = self.root
+            with self.assertRaisesRegex(RuntimeError, "build failed"):
+                release.publish(self.root, plan, self.publish_args())
+            promote.assert_not_called()
+
+    def test_manual_publisher_skips_large_existing_browser(self):
+        plan = self.plan()
+        browser_tag = plan["images"][1]["tag"]
+        with patch.object(release, "remote_digest", side_effect=lambda tag: "sha256:" + "b" * 64 if tag == browser_tag else None), \
+                patch.object(release, "snapshot") as snapshot, patch.object(release.subprocess, "run"), \
+                patch.object(release, "check"), patch.object(release, "ensure_builder"), \
+                patch.object(release, "build_image") as build, patch.object(release, "promote"):
+            snapshot.return_value.__enter__.return_value = self.root
+            release.publish(self.root, plan, self.publish_args())
+        self.assertEqual(build.call_count, 1)
+        self.assertEqual(build.call_args.args[1]["name"], "manager")
+
+    def test_actual_cli_manager_only_change_plan_reuses_browser_manifest(self):
+        before = self.plan()
+        browser_tag = before["images"][1]["tag"]
+        self.put("manager.go", "package changed\n")
+        self.commit()
+        fakebin = self.root / "fakebin"
+        fakebin.mkdir()
+        docker = fakebin / "docker"
+        docker.write_text('''#!/usr/bin/env python3
+import json, os, sys
+from pathlib import Path
+args = sys.argv[1:]
+with open(os.environ["DOCKER_TRACE"], "a") as trace:
+    trace.write(json.dumps(args) + "\\n")
+if args[:3] != ["buildx", "imagetools", "inspect"]:
+    sys.exit("unexpected Docker operation")
+if args[3] == os.environ["EXISTING_BROWSER"]:
+    print(json.dumps({"digest": "sha256:" + "b" * 64}))
+else:
+    print("manifest unknown", file=sys.stderr)
+    sys.exit(1)
+''')
+        docker.chmod(0o755)
+        trace = self.root / "docker-trace.jsonl"
+        environment = dict(release.os.environ, PATH=str(fakebin) + ":" + release.os.environ["PATH"],
+                           DOCKER_TRACE=str(trace), EXISTING_BROWSER=browser_tag)
+        output = subprocess.check_output([release.sys.executable, "-B", str(Path(release.__file__).resolve()),
+                                          "plan", "--probe"], cwd=self.root, env=environment, text=True)
+        after = json.loads(output)
+        self.assertTrue(after["images"][0]["build"])
+        self.assertFalse(after["images"][1]["build"])
+        self.assertEqual(after["images"][1]["tag"], browser_tag)
+        self.assertNotEqual(before["images"][0]["tag"], after["images"][0]["tag"])
+        operations = [json.loads(line) for line in trace.read_text().splitlines()]
+        self.assertEqual(len(operations), 2)
+        self.assertTrue(all(op[:3] == ["buildx", "imagetools", "inspect"] for op in operations))
+
+
+class RegistryTests(unittest.TestCase):
+    def test_manifest_probe_returns_digest_without_layer_pull(self):
+        digest = "sha256:" + "a" * 64
+        with patch.object(release.subprocess, "run", return_value=subprocess.CompletedProcess([], 0, json.dumps({"digest": digest}), "")) as run:
+            self.assertEqual(release.remote_digest("example/image:tag"), digest)
+        command = run.call_args.args[0]
+        self.assertEqual(command[:4], ["docker", "buildx", "imagetools", "inspect"])
+        self.assertNotIn("pull", command)
+
+    def test_missing_tag_triggers_build_but_auth_and_network_errors_never_do(self):
+        for error in ("manifest unknown", "ERROR: example/image:tag: not found", "404 Not Found", "unexpected status: 404"):
+            with self.subTest(error=error), patch.object(release.subprocess, "run", return_value=subprocess.CompletedProcess([], 1, "", error)):
+                self.assertIsNone(release.remote_digest("example/image:tag"))
+        for error in ("unauthorized", "denied: repository not found", "403 Forbidden", "insufficient_scope",
+                      "429 Too Many Requests", "timeout", "no such host", "connection reset by peer"):
+            with self.subTest(error=error), patch.object(release.subprocess, "run", return_value=subprocess.CompletedProcess([], 1, "", error)):
+                with self.assertRaisesRegex(RuntimeError, "probe failed"):
+                    release.remote_digest("example/image:tag")
+
+    def test_invalid_digest_is_not_accepted_as_reusable(self):
+        with patch.object(release.subprocess, "run", return_value=subprocess.CompletedProcess([], 0, '{"digest":"invalid"}', "")):
+            with self.assertRaisesRegex(ValueError, "invalid digest"):
+                release.remote_digest("example/image:tag")
+
+
+class BuildBoundaryTests(unittest.TestCase):
+    def test_dependency_layers_precede_source_copy_and_no_workflow_dockerfile_rewrite(self):
+        root = Path(release.__file__).resolve().parent.parent
+        dockerfile = (root / "Dockerfile").read_text()
+        self.assertLess(dockerfile.index("COPY client/package.json"), dockerfile.index("npm ci"))
+        self.assertLess(dockerfile.index("npm ci"), dockerfile.index("COPY client/ ."))
+        self.assertLess(dockerfile.index("COPY go.mod go.sum"), dockerfile.index("go mod download"))
+        self.assertLess(dockerfile.index("go mod download"), dockerfile.index("COPY cmd/"))
+        self.assertNotIn("COPY . .", dockerfile)
+        workflow = (root / ".github/workflows/build.yml").read_text()
+        self.assertNotIn("sed -i", workflow)
+        self.assertIn("needs: [go, frontend, images]", workflow)
+        self.assertNotIn("    outputs:", workflow)
+        self.assertNotIn("linux/arm", workflow)
+        self.assertNotIn("GHCR_ACCESS_TOKEN", workflow)
 
 
 if __name__ == "__main__":

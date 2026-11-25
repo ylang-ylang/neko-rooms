@@ -1,79 +1,138 @@
-name: "CI for builds"
+name: Single-port checks and release
 
 on:
   push:
-    branches:
-      - master
-    tags:
-      - 'v*'
+    branches: [main, master, release/single-port]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# One publisher across ALL release branches; never cancel midway through two
+# channel writes. A stale branch-tip check also prevents old reruns promoting.
+concurrency:
+  group: single-port-${{ github.event_name == 'pull_request' && github.ref || 'publish' }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  # GitHub owner ylang-ylang is NOT Docker Hub account ylangylang.
+  # Other forks must set this repository variable explicitly.
+  DOCKERHUB_NAMESPACE: ${{ vars.DOCKERHUB_NAMESPACE }}
 
 jobs:
-  build-client:
-    name: Build Client Artifacts
-    uses: ./.github/workflows/client_build.yml
-
-  build-and-push:
-    name: Build and Push Docker Image
+  go:
+    name: Go and release unit tests
     runs-on: ubuntu-latest
-    needs: build-client
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
         with:
-          fetch-depth: 0
+          go-version-file: go.mod
+          cache: true
+      - run: python3 -B -m unittest discover -s scripts -p 'test_*.py' -v
+      - run: python3 scripts/release.py check --component adapter
+      - run: python3 scripts/release.py check --component go
 
-      - name: Download client dist
-        uses: actions/download-artifact@v4
+  frontend:
+    name: Frontend checks
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
         with:
-          name: client
-          path: client/dist
+          node-version: 20
+          cache: npm
+          cache-dependency-path: client/package-lock.json
+      - run: python3 scripts/release.py check --component client
+      # Release builds compile the frontend once, inside the cached Dockerfile.
+      - name: Compile frontend for pull requests
+        if: github.event_name == 'pull_request'
+        working-directory: client
+        run: npm run build
 
-      - name: Set up QEMU
-        uses: docker/setup-qemu-action@v3
-
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
-
-      - name: Extract metadata (tags, labels) for Docker
-        uses: docker/metadata-action@v5
-        id: meta
-        with:
-          images: |
-            docker.io/${{ github.repository }}
-            ghcr.io/${{ github.repository }}
-          tags: |
-            type=raw,value=latest,enable=${{ endsWith(github.ref, github.event.repository.default_branch) }}
-            type=semver,pattern={{version}}
-            type=semver,pattern={{major}}.{{minor}}
-            type=semver,pattern={{major}}
-
-      - name: Log in to Docker Hub
-        uses: docker/login-action@v3
-        with:
-          username: ${{ github.actor }}
-          password: ${{ secrets.DOCKER_TOKEN }}
-      
-      - name: Log in to GitHub Container Registry
-        uses: docker/login-action@v3
-        with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GHCR_ACCESS_TOKEN }}
-
-      - name: Remove client stage from Dockerfile
-        # Change dockerfile: remove first stage - everything between # STAGE 1 and # STAGE 2
-        # Replace "--from=frontend /src/dist/" with "./client/dist/"
+  images:
+    name: Immutable ${{ matrix.image }}
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        image: [manager, browser]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check one-time Docker Hub bootstrap
+        env:
+          HUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
+          HUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
         run: |
-          sed -i '/# STAGE 1/,/# STAGE 2/d' ./Dockerfile
-          sed -i 's/--from=frontend \/src\/dist\//.\/client\/dist\//g' ./Dockerfile
-
-      - name: Build and push
+          if [ -z "$HUB_USERNAME" ] || [ -z "$HUB_TOKEN" ]; then
+            echo '::error::Set repository secrets DOCKERHUB_USERNAME and DOCKERHUB_TOKEN once; see docs/releasing.md.'
+            exit 1
+          fi
+      - uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+      # Hosted runners already have the buildx CLI. Manifest inspection needs
+      # no builder, so a reused Chromium artifact never starts/pulls BuildKit.
+      - name: Plan without pulling image layers
+        id: plan
+        env:
+          COMPONENT: ${{ matrix.image }}
+        run: >-
+          python3 scripts/release.py plan --probe --image "$COMPONENT"
+          --github-output "$GITHUB_OUTPUT" --output "$RUNNER_TEMP/release-plan.json"
+      - name: Reuse immutable remote artifact
+        if: steps.plan.outputs.build == 'false'
+        env:
+          IMAGE_TAG: ${{ steps.plan.outputs.tag }}
+          IMAGE_DIGEST: ${{ steps.plan.outputs.digest }}
+        run: printf 'Reusing %s@%s; no image build or layer pull.\n' "$IMAGE_TAG" "$IMAGE_DIGEST"
+      - uses: docker/setup-buildx-action@v3
+        if: steps.plan.outputs.build == 'true'
+      - name: Build and publish immutable image only
+        if: steps.plan.outputs.build == 'true'
         uses: docker/build-push-action@v6
         with:
-          context: ./
+          context: ${{ steps.plan.outputs.context }}
+          platforms: ${{ steps.plan.outputs.platform }}
           push: true
-          tags: ${{ steps.meta.outputs.tags }}
-          labels: ${{ steps.meta.outputs.labels }}
-          platforms: linux/amd64,linux/arm64,linux/arm/v7
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+          tags: ${{ steps.plan.outputs.tag }}
+          labels: ${{ steps.plan.outputs.labels }}
+          # Separate scopes prevent Manager and Chromium evicting each other's
+          # GHA cache. Registry cache also works for the one-command fallback.
+          cache-from: |
+            type=registry,ref=${{ steps.plan.outputs.cache_ref }}
+            type=gha,scope=${{ steps.plan.outputs.cache_scope }}
+          cache-to: |
+            type=registry,ref=${{ steps.plan.outputs.cache_ref }},mode=max
+            type=gha,scope=${{ steps.plan.outputs.cache_scope }},mode=max
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-plan-${{ matrix.image }}
+          path: ${{ runner.temp }}/release-plan.json
+
+  promote:
+    name: Promote tested release pair
+    needs: [go, frontend, images]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+      - name: Verify both artifacts then promote channel aliases
+        env:
+          RELEASE_REF: ${{ github.ref }}
+        run: >-
+          python3 scripts/release.py promote --expected-ref "$RELEASE_REF"
+          --output "$RUNNER_TEMP/release.json" --summary "$GITHUB_STEP_SUMMARY"
+      - name: Exact image refs and digests for deployment
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: single-port-release
+          path: ${{ runner.temp }}/release.json
+          if-no-files-found: ignore
