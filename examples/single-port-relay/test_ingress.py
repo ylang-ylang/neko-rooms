@@ -86,6 +86,8 @@ class FixtureBackend(BaseHTTPRequestHandler):
 
 @unittest.skipUnless(os.environ.get("NEKO_RELAY_DOCKER_TESTS") == "1", "opt-in isolated Docker ingress tests")
 class IngressTests(unittest.TestCase):
+    HOST = "127.0.0.1"
+
     @classmethod
     def command(cls, *args, **kwargs):
         result = subprocess.run(args, capture_output=True, text=True, timeout=60, **kwargs)
@@ -113,20 +115,29 @@ class IngressTests(unittest.TestCase):
         with socket.socket() as available:
             available.bind(("127.0.0.1", 0))
             cls.port = available.getsockname()[1]
-        cls.authority = "127.0.0.1:" + str(cls.port)
+        cls.authority = cls.HOST + ":" + str(cls.port)
         cls.origin = "https://" + cls.authority
-        # The CLI deliberately limits dev LAN mode to RFC1918. This isolated
-        # transport fixture instead issues a loopback-IP certificate, so Node
-        # does ordinary IP verification with no SNI and no custom ALPN.
         values = dict(demo.DEFAULTS, MANAGER_IMAGE=demo.ROOM_IMAGE, ROOM_NETWORK=cls.name,
                       ROOM_NETWORK_CIDR=str(subnet), TURN_PRIVATE_IP=str(subnet.network_address + 10),
                       INSTANCE_NAME=cls.name, PUBLIC_PORT=str(cls.port))
+        if cls.HOST != "127.0.0.1":
+            values.update(APP_HOST=cls.HOST, TURN_HOST=cls.HOST)
         demo.validate_topology(values, dev_ca=True, public=False)
-        values.update(APP_HOST="127.0.0.1", TURN_HOST="127.0.0.1", WEB_SNI_ROUTE="",
-                      PUBLIC_AUTHORITY=cls.authority, HTTP_AUTHORITY=cls.authority, PUBLIC_ORIGIN=cls.origin,
-                      DEV_CA_LOCATION="location = /ca.crt { alias /run/relay/public/ca.crt; }")
+        if cls.HOST == "127.0.0.1":
+            # The CLI limits dev LAN mode to RFC1918. Only this isolated fixture
+            # issues a loopback-IP certificate for ordinary no-SNI IP clients.
+            values.update(APP_HOST=cls.HOST, TURN_HOST=cls.HOST, WEB_SNI_ROUTE="",
+                          PUBLIC_AUTHORITY=cls.authority, HTTP_AUTHORITY=cls.authority, PUBLIC_ORIGIN=cls.origin)
+        if values["WEB_SNI_ROUTE"]:
+            raise AssertionError("shared identities must use post-TLS classification, not web SNI")
+        values["DEV_CA_LOCATION"] = "location = /ca.crt { alias /run/relay/public/ca.crt; }"
         cert, key = demo.development_cert(cls.state, values)
         cls.ca = cls.state / "tls/ca.crt"
+        if cls.HOST != "127.0.0.1":
+            cls.command("openssl", "verify", "-CAfile", str(cls.ca), "-verify_hostname", cls.HOST, str(cert))
+            sans = cls.command("openssl", "x509", "-in", str(cert), "-noout", "-ext", "subjectAltName")
+            if sans.count("DNS:" + cls.HOST) != 1:
+                raise AssertionError("shared hostname certificate SAN must cover the name exactly once")
         cls.turn_ip = values["TURN_PRIVATE_IP"]
         cls.turn_user, cls.turn_password = "fixture", secrets.token_hex(32)
         values.update(TURN_USERNAME=cls.turn_user, TURN_PASSWORD=cls.turn_password)
@@ -184,11 +195,15 @@ class IngressTests(unittest.TestCase):
 const https = require('https'), fs = require('fs');
 const options = {ca: fs.readFileSync(process.argv[2]), headers: {
   Origin: process.argv[1], Authorization: 'Bearer fixture-only'}};
+// Test-local DNS only; TLS SNI and certificate hostname verification stay normal.
+if (new URL(process.argv[1]).hostname !== '127.0.0.1')
+  options.lookup = (_host, opts, cb) => cb(null, opts.all
+    ? [{address: '127.0.0.1', family: 4}] : '127.0.0.1', 4);
 if (process.argv[3] === 'alpn') options.ALPNProtocols = ['http/1.1'];
 https.get(process.argv[1] + '/manage/auth/status', options, res => {
-  const alpn = res.socket.alpnProtocol || false;
+  const alpn = res.socket.alpnProtocol || false, servername = res.socket.servername || false;
   let body = ''; res.setEncoding('utf8'); res.on('data', d => body += d);
-  res.on('end', () => console.log(JSON.stringify({status: res.statusCode, body, alpn})));
+  res.on('end', () => console.log(JSON.stringify({status: res.statusCode, body, alpn, servername})));
 }).on('error', e => { console.error(e.code); process.exitCode = 1; });
 """
         return json.loads(cls.command("node", "-e", script, cls.origin, str(cls.ca), "alpn" if alpn else "default"))
@@ -198,8 +213,9 @@ https.get(process.argv[1] + '/manage/auth/status', options, res => {
         if alpn:
             context.set_alpn_protocols(alpn)
         plain = socket.create_connection(("127.0.0.1", self.port), timeout=10)
-        # Python, like default Node, does not send SNI for an IP server_hostname.
-        return context.wrap_socket(plain, server_hostname="127.0.0.1")
+        # Normal DNS SNI/hostname verification for the shared-name case; no SNI
+        # for the IP case. Neither changes the TLS application protocol.
+        return context.wrap_socket(plain, server_hostname=self.HOST)
 
     @staticmethod
     def receive_exact(connection, length):
@@ -234,11 +250,12 @@ https.get(process.argv[1] + '/manage/auth/status', options, res => {
             offset += 4 + (size + 3) // 4 * 4
         return struct.unpack("!H", response[:2])[0], parsed
 
-    def test_default_node_ip_https_and_alpn_fast_path_forward_https_headers(self):
+    def test_default_node_https_and_alpn_fast_path_forward_https_headers(self):
         for explicit_alpn in (False, True):
             with self.subTest(explicit_alpn=explicit_alpn):
                 result = self.node_get(explicit_alpn)
                 self.assertEqual(result["status"], 200)
+                self.assertEqual(result["servername"], False if self.HOST == "127.0.0.1" else self.HOST)
                 if not explicit_alpn:
                     self.assertFalse(result["alpn"])
                 headers = json.loads(result["body"])
@@ -280,6 +297,7 @@ https.get(process.argv[1] + '/manage/auth/status', options, res => {
                 offset += 4 + (size + 3) // 4 * 4
             self.assertEqual(attributes[9][2:4], b"\x04\x01", "TURN must retain long-term authentication")
             realm, nonce = attributes[0x14], attributes[0x15]
+            self.assertEqual(realm.decode(), self.HOST)
             key = hashlib.md5(self.turn_user.encode() + b":" + realm + b":" + self.turn_password.encode()).digest()
             auth = self.attribute(6, self.turn_user.encode()) + self.attribute(0x14, realm) + self.attribute(0x15, nonce)
             kind, allocated = self.stun_request(connection, 3, self.attribute(0x19, b"\x11\0\0\0") + auth, key)
@@ -309,15 +327,21 @@ https.get(process.argv[1] + '/manage/auth/status', options, res => {
         import http.client
         from contextlib import closing
         with closing(http.client.HTTPConnection("127.0.0.1", self.port, timeout=10)) as connection:
-            connection.request("GET", "/ca.crt")
+            connection.request("GET", "/ca.crt", headers={"Host": self.authority})
             response = connection.getresponse()
             self.assertEqual(response.status, 200)
             self.assertEqual(response.read(), self.ca.read_bytes())
-            connection.request("GET", "/manage/auth/status")
+            connection.request("GET", "/manage/auth/status", headers={"Host": self.authority})
             response = connection.getresponse()
             self.assertEqual(response.status, 308)
             self.assertEqual(response.getheader("Location"), self.origin + "/manage/auth/status")
             response.read()
+
+
+class SharedNameIngressTests(IngressTests):
+    # One FQDN, one certificate name, one socket; no web-SNI fallback. Reuse all
+    # the ordinary HTTP/WS, STUN allocation/ChannelData and rejection checks.
+    HOST = "shared.neko.localhost"
 
 
 if __name__ == "__main__":
