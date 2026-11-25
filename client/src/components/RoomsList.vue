@@ -47,7 +47,7 @@
         {{ item.created | timeago }}
       </template>
       <template v-slot:[`item.actions`]="{ item }">
-        <div class="room-actions">
+        <div class="room-actions" :class="{ 'room-actions--compact': !$store.state.roomsConfig.uses_mux }">
           <RoomActionBtn action="start" :roomId="item.id" :disabled="item.running" />
           <RoomActionBtn action="stop" :roomId="item.id" :disabled="!item.running && !item.paused" />
           <RoomActionBtn action="pause" :roomId="item.id" :disabled="!item.running" />
@@ -270,5 +270,14 @@ export default class RoomsList extends Vue {
 }
 .room-actions {
   white-space: nowrap;
+}
+@media (min-width: 600px) {
+  /* The optional connections column needs a narrower action cell, not smaller targets. */
+  .room-actions--compact {
+    display: grid;
+    grid-template-columns: repeat(3, 36px);
+    row-gap: 4px;
+    width: max-content;
+  }
 }
 </style>

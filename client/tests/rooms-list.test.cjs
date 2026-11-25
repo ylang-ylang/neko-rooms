@@ -302,7 +302,16 @@ test('refresh failure after creation keeps committed success, without offering a
   instance.$destroy()
 })
 
-test('layout rules are scoped, wrap identifiers and leave action buttons on one line', () => {
+test('optional connections use compact desktop actions without shrinking targets or changing mux/mobile layout', () => {
+  for (const usesMux of [true, false]) {
+    const instance = list(usesMux)
+    assert.equal(slot(instance, 'actions')[0].data.class['room-actions--compact'], !usesMux)
+    instance.$destroy()
+  }
+  assert.match(source.styles[0].content, /@media \(min-width: 600px\)\s*\{[\s\S]*\.room-actions--compact\s*\{[^}]*grid-template-columns: repeat\(3, 36px\);[^}]*width: max-content;/)
+})
+
+test('layout rules are scoped, wrap identifiers and leave mux action buttons on one line', () => {
   assert.deepEqual(compiler.compile(source.template.content).errors, [])
   assert.equal(source.styles.length, 1)
   assert.equal(source.styles[0].scoped, true)
