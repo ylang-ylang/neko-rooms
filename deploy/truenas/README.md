@@ -80,7 +80,7 @@ Read-only endpoint checks use the configured transport:
 ```sh
 python3 deploy/truenas/configure.py --settings "$app/native-relay.settings" --check-endpoint
 PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s deploy/truenas -p 'test_*.py' -v
-node --test deploy/truenas/test_room_ice.cjs
+node --test deploy/truenas/test_room_ice.cjs deploy/truenas/test_tls_warning.cjs
 ```
 
 Endpoint checks do not establish media. Full acceptance needs real Chromium and Firefox: login, native1920×1080 continuous rendered frames, selected client `relay` with `relayProtocol=tcp` in plain mode, normal ICE `all`, and same-port stock Playwright CDP plus native input on an owned canary. Test with a real IP and `isSecureContext=false`, not a localhost exception or certificate bypass. Remove only owned canary resources.

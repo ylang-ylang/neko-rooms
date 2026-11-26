@@ -22,9 +22,9 @@ function fixture(protocol='https:',dataset={}) {
   const document={body,documentElement:body,currentScript:{dataset},createElement:tag=>new Node(tag),addEventListener:(k,v)=>events[k]=v};
   const location={protocol,href:protocol+'//neko.example:8443/room/test/'};
   const window={RTCPeerConnection:Peer,location};
-  vm.runInNewContext(code,{window,document,location,navigator:{userAgent:'Chrome'},URL,setTimeout:(f,ms)=>{timers.set(++id,{f,ms});return id;},clearTimeout:id=>timers.delete(id)});
+  const sandbox=vm.createContext({window,document,location,navigator:{userAgent:'Chrome'},URL,setTimeout:(f,ms)=>{timers.set(++id,{f,ms});return id;},clearTimeout:id=>timers.delete(id)});vm.runInContext(code,sandbox);
   const flatten=n=>[n,...n.children.flatMap(flatten)];
-  return {Peer,window,body,events,timers,flush(){for(const[id,{f}]of[...timers]){timers.delete(id);f();}},nodes(){return flatten(body);},text(){return flatten(body).map(x=>x.textContent||'').join(' ');},banner(){return body.children.find(x=>'data-neko-tls-warning'in x.attributes);}};
+  return {Peer,window,body,events,timers,sandbox,flush(){for(const[id,{f}]of[...timers]){timers.delete(id);f();}},nodes(){return flatten(body);},text(){return flatten(body).map(x=>x.textContent||'').join(' ');},banner(){return body.children.find(x=>'data-neko-tls-warning'in x.attributes);}};
 }
 const fail=p=>p.emit('icecandidateerror',{url:turn,errorCode:701,errorText:'Failed to establish connection'});
 test('HTTP never wraps or installs warning listeners',()=>{const f=fixture('http:');assert.equal(f.window.RTCPeerConnection,f.Peer);assert.deepEqual(Object.keys(f.events),[]);});
@@ -37,3 +37,5 @@ test('only explicitly configured HTTP alternative is linked',()=>{const f=fixtur
 test('native config, return value and static API remain untouched',()=>{const f=fixture(),p=new f.window.RTCPeerConnection(cfg);assert.equal(p.config,cfg);assert.equal(f.window.RTCPeerConnection.generateCertificate(),'native-static');assert.equal(p.setConfiguration(cfg),'native-result');assert.equal(p.config,cfg);});
 test('removing TURNS cancels obsolete failure help',()=>{const f=fixture(),p=new f.window.RTCPeerConnection(cfg);fail(p);p.setConfiguration({iceServers:[]});f.flush();assert.equal(f.banner(),undefined);});
 test('dismissal persists for this page, keyboard help is not sent remotely',()=>{const f=fixture(),p=new f.window.RTCPeerConnection(cfg);fail(p);f.flush();let stopped=false;f.events.keydown({target:{closest:()=>f.banner()},stopImmediatePropagation:()=>stopped=true});assert.equal(stopped,true);f.nodes().find(n=>n.attributes['aria-label']==='Dismiss TURN/TLS warning').events.click();fail(p);f.flush();assert.equal(f.banner(),undefined);});
+
+test('TLS watcher sees the preferred URL after retained-room transport rewrite',()=>{const f=fixture();const previous=turn.replace('turns:','turn:');const shim=fs.readFileSync(__dirname+'/room-ice.js.template','utf8').replace('@TURN_URL_JSON@',JSON.stringify(turn)).replace('@PREVIOUS_TURN_URL_JSON@',JSON.stringify(previous));vm.runInContext(shim,f.sandbox);const original={iceServers:[{urls:[previous],username:'kept',credential:'kept'}]};const p=new f.window.RTCPeerConnection(original);assert.equal(p.getConfiguration().iceServers[0].urls[0],turn);assert.equal(original.iceServers[0].urls[0],previous);fail(p);f.flush();assert.ok(f.banner());const nginx=fs.readFileSync(__dirname+'/nginx.conf.template','utf8');assert.ok(nginx.indexOf('src="/.neko/tls-warning.js"')<nginx.indexOf('src="/.neko/room-ice.js"'));});
