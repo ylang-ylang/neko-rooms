@@ -52,6 +52,56 @@
     else banner.append(element('p', 'No CA download is configured. Ask this deployment’s administrator for its CA certificate.'));
     const http = link('Use the HTTP entry instead', httpPath, 'http:');
     if (http) banner.append(http);
+    if (ca && /^[a-zA-Z0-9.\[\]:-]+$/.test(location.host || '') && /^\/[a-zA-Z0-9._/-]+$/.test(caPath)) {
+      const host = location.host;
+      const safeName = host.replace(/[^a-zA-Z0-9.-]/g, '-');
+      const httpCaUrl = 'http://' + host + caPath;
+      const cmds = {
+        linux: 'curl --noproxy "*" -fsS ' + httpCaUrl + ' -o /tmp/neko-ca.crt && mkdir -p "$HOME/.pki/nssdb" && certutil -d "sql:$HOME/.pki/nssdb" -A -t "C,," -n "Neko CA ' + safeName + '" -i /tmp/neko-ca.crt',
+        macos: 'curl --noproxy "*" -fsS ' + httpCaUrl + ' -o /tmp/neko-ca.crt && sudo security add-trusted-cert -d -r trustRoot -k /Library/Keychains/System.keychain /tmp/neko-ca.crt',
+        windows: 'curl.exe --noproxy "*" -fsS ' + httpCaUrl + ' -o "$env:TEMP\\neko-ca.crt"; certutil -addstore -f Root "$env:TEMP\\neko-ca.crt"',
+      };
+      const ua = navigator.userAgent || '';
+      let activeOs = /Windows/i.test(ua) ? 'windows' : (/Macintosh|Mac OS X/i.test(ua) ? 'macos' : 'linux');
+      const cliBox = element('div');
+      cliBox.style.cssText = 'margin:10px 0 8px;padding:10px 12px;border-radius:8px;background:#fff8dc;border:1px solid #d4a64a';
+      const cliHead = element('div');
+      cliHead.style.cssText = 'display:flex;align-items:center;gap:6px;flex-wrap:wrap;margin-bottom:6px';
+      cliHead.append(element('strong', 'Quick CLI trust (then fully restart browser):'));
+      const pre = element('pre');
+      pre.style.cssText = 'margin:0;padding:8px 10px;border-radius:6px;background:#241900;color:#fff8dc;font:12px/1.45 ui-monospace,SFMono-Regular,Menlo,monospace;white-space:pre-wrap;word-break:break-all';
+      const osBtns = {};
+      const renderOs = os => {
+        activeOs = os;
+        pre.textContent = cmds[os];
+        for (const [k, btn] of Object.entries(osBtns)) {
+          btn.style.cssText = 'padding:2px 8px;border-radius:5px;border:1px solid #b56e00;cursor:pointer;font:12px/1.4 system-ui,sans-serif;' +
+            (k === os ? 'background:#b56e00;color:#fff;font-weight:700' : 'background:#fff;color:#241900');
+        }
+      };
+      for (const [k, label] of [['linux', 'Linux'], ['macos', 'macOS'], ['windows', 'Windows']]) {
+        const btn = element('button', label);
+        btn.type = 'button';
+        btn.addEventListener('click', () => renderOs(k));
+        osBtns[k] = btn;
+        cliHead.append(btn);
+      }
+      const copyBtn = element('button', 'Copy command');
+      copyBtn.type = 'button';
+      copyBtn.setAttribute('data-neko-copy-ca-cmd', '');
+      copyBtn.style.cssText = 'margin-left:auto;padding:3px 10px;border-radius:5px;border:0;background:#173e73;color:#fff;font:12px/1.4 system-ui,sans-serif;font-weight:700;cursor:pointer';
+      copyBtn.addEventListener('click', () => {
+        const text = cmds[activeOs];
+        const done = () => { copyBtn.textContent = 'Copied!'; setTimeout(() => { copyBtn.textContent = 'Copy command'; }, 2000); };
+        if (navigator.clipboard && navigator.clipboard.writeText) {
+          navigator.clipboard.writeText(text).then(done, () => {});
+        }
+      });
+      cliHead.append(copyBtn);
+      renderOs(activeOs);
+      cliBox.append(cliHead, pre);
+      banner.append(cliBox);
+    }
     const instructions = element('details');
     instructions.append(element('summary', 'How to trust the CA'));
     instructions.append(element('p', 'Chromium: Settings → Privacy and security → Security → Manage certificates → Authorities / Custom roots → Import. Select the downloaded CA. Close all browser windows and fully restart Chromium.'));
