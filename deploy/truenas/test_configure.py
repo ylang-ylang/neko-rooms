@@ -95,6 +95,8 @@ class ConfigurationTests(unittest.TestCase):
         self.assertIn("/run/relay/room-ice.js", [v["target"] for v in gateway["volumes"]])
         self.assertNotIn("ssl_certificate", (state / "nginx.conf").read_text())
         self.assertIn("proxy_set_header X-Forwarded-Proto http", (state / "nginx.conf").read_text())
+        room_location = (state / "nginx.conf").read_text().split("location /room/ {", 1)[1].split("}", 1)[0]
+        self.assertNotIn("proxy_set_header", room_location)  # Preserve inherited WebSocket headers.
         ice = json.loads(model["services"]["neko-rooms"]["environment"]["NEKO_ROOMS_RELAY_ICE_SERVERS_FRONTEND"])
         self.assertEqual(ice[0]["urls"], ["turn:neko.private.test:22222?transport=tcp"])
         self.assertEqual((state / "turn-credentials.json").read_bytes(), credentials)

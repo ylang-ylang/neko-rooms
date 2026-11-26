@@ -88,6 +88,9 @@ http {
         proxy_set_header X-Forwarded-For $remote_addr;
         proxy_set_header X-Real-IP $remote_addr;
         proxy_set_header Forwarded "";
+        # Set at server level: a child proxy_set_header would discard inherited
+        # Upgrade/Connection/Host headers and break native WebSocket handshakes.
+        proxy_set_header Accept-Encoding "";
         proxy_set_header Authorization $http_authorization;
         proxy_set_header Upgrade $http_upgrade;
         proxy_set_header Connection $connection_upgrade;
@@ -102,7 +105,6 @@ http {
         location /manage/ { proxy_pass $manager$request_uri; }
         location = /.neko/room-ice.js { alias /run/relay/room-ice.js; default_type application/javascript; add_header Cache-Control "no-store" always; }
         location /room/ {
-            proxy_set_header Accept-Encoding "";
             sub_filter_once on;
             sub_filter '<head>' '<head><script src="/.neko/room-ice.js"></script>';
             proxy_pass $manager$request_uri;

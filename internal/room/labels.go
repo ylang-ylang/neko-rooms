@@ -116,9 +116,11 @@ func (manager *RoomManagerCtx) extractLabels(labels map[string]string) (*RoomLab
 
 	if networkMode == config.NetworkModeHTTP {
 		// HTTP rooms are same-origin even when adopted labels or instance.url
-		// retain the operator's old LAN address. Other modes keep their URLs.
+		// retain the operator's old LAN address.
 		url = path.Join("/", manager.config.PathPrefix, name) + "/"
-	} else if _, present := labels["m1k1o.neko_rooms.url"]; !present {
+	} else if _, present := labels["m1k1o.neko_rooms.url"]; networkMode == config.NetworkModeRelay || !present {
+		// Relay viewers use the current entry, not immutable creation-time
+		// scheme/port labels. Endpoint changes must not recreate browsers.
 		cfg := *manager.config
 		cfg.NetworkMode = networkMode
 		url = cfg.GetRoomUrl(name)

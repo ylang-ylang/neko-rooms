@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -479,5 +480,28 @@ func TestDirectV2AndLegacyLookupSurviveRelayPolicySwitch(t *testing.T) {
 	defer fake.mu.Unlock()
 	if len(fake.created) != 1 || len(fake.containers[id+strings.Repeat("a", 52)].HostConfig.PortBindings) != 2 {
 		t.Fatal("changing network policy mutated an existing container")
+	}
+}
+
+func TestRelayViewerLinksFollowCurrentEntryWithoutContainerMutation(t *testing.T) {
+	cfg := networkConfig(config.NetworkModeRelay, false)
+	cfg.PathPrefix = "/room"
+	cfg.InstanceUrl, _ = url.Parse("https://old.example:28322/")
+	manager, fake := newNetworkManager(t, cfg)
+	id, err := manager.Create(context.Background(), networkSettings("retained"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg.InstanceUrl, _ = url.Parse("http://192.168.202.11:22222/")
+	entry, err := manager.GetEntry(context.Background(), id)
+	if err != nil || entry.URL != "http://192.168.202.11:22222/room/retained/" {
+		t.Fatalf("stale viewer link: %#v %v", entry, err)
+	}
+	fake.mu.Lock()
+	defer fake.mu.Unlock()
+	for _, c := range fake.containers {
+		if c.Config.Labels["m1k1o.neko_rooms.url"] != "https://old.example:28322/room/retained/" {
+			t.Fatal("endpoint change mutated a retained container")
+		}
 	}
 }
