@@ -122,6 +122,45 @@ class ConfigurationTests(unittest.TestCase):
         self.assertNotIn(saved["password"], yaml)
         self.assertEqual(services["turn"]["networks"]["rooms"]["ipv4_address"], "172.29.70.10")
 
+    def test_ipv4_hosts_generate_ip_san_and_keep_existing_auth(self):
+        self.values.update(APP_HOST="192.168.202.11", TURN_HOST="")
+        self.write_settings()
+        state = self.configure()
+        services = self.model(state / "neko.compose.yaml")["services"]
+        self.assertEqual(services["neko-rooms"]["environment"]["NEKO_ROOMS_INSTANCE_URL"], "https://192.168.202.11:28322/")
+        ice = json.loads((state / "relay.env").read_text().split("=", 1)[1])
+        self.assertEqual(ice[0]["urls"], ["turns:192.168.202.11:28322?transport=tcp"])
+        result = RUN(["openssl", "x509", "-in", str(state / "tls/server.crt"), "-noout", "-ext", "subjectAltName"],
+                     capture_output=True, text=True, check=True)
+        self.assertIn("IP Address:192.168.202.11", result.stdout)
+        self.assertNotIn("DNS:192.168.202.11", result.stdout)
+        with self.assertRaisesRegex(ValueError, "OpenSSL"):
+            cfg.check_certificate(state / "tls/server.crt", state / "tls/server.key",
+                                  dict(self.values, TURN_HOST="192.168.202.12"))
+        for name, content in self.files.items():
+            self.assertEqual((self.app / name).read_text(), content, name)
+
+    def test_mixed_dns_ip_certificate_covers_both_host_types(self):
+        self.values.update(APP_HOST="192.168.202.11", TURN_HOST="turn.private.test")
+        self.write_settings()
+        state = self.configure()
+        cfg.check_certificate(state / "tls/server.crt", state / "tls/server.key", self.values)
+        san = RUN(["openssl", "x509", "-in", str(state / "tls/server.crt"), "-noout", "-ext", "subjectAltName"],
+                  capture_output=True, text=True, check=True).stdout
+        self.assertIn("IP Address:192.168.202.11", san)
+        self.assertIn("DNS:turn.private.test", san)
+
+    def test_ipv6_hosts_are_canonical_and_bracketed_in_urls(self):
+        self.values.update(APP_HOST="2001:0db8::11", TURN_HOST="")
+        self.write_settings()
+        state = self.configure()
+        services = self.model(state / "neko.compose.yaml")["services"]
+        self.assertEqual(services["neko-rooms"]["environment"]["NEKO_ROOMS_INSTANCE_URL"], "https://[2001:db8::11]:28322/")
+        ice = json.loads((state / "relay.env").read_text().split("=", 1)[1])
+        self.assertEqual(ice[0]["urls"], ["turns:[2001:db8::11]:28322?transport=tcp"])
+        cfg.check_certificate(state / "tls/server.crt", state / "tls/server.key",
+                              dict(self.values, APP_HOST="2001:db8::11", TURN_HOST="2001:db8::11"))
+
     def test_idempotent_setup_keeps_permanent_ca_keys_and_turn(self):
         state = self.configure()
         names = ("tls/ca.crt", "tls/ca.key", "tls/server.crt", "tls/server.key", "turn-credentials.json")
@@ -283,9 +322,9 @@ class ConfigurationTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "unknown, duplicate"):
                 cfg.read_settings(self.settings)
 
-    def test_topology_requires_dns_private_subnet_and_opt_in_bind(self):
-        cases = (({"APP_HOST": "192.168.202.11"}, "DNS name"),
-                 ({"TURN_HOST": "192.168.202.11"}, "DNS name"),
+    def test_topology_requires_valid_hosts_private_subnet_and_opt_in_bind(self):
+        cases = (({"APP_HOST": "https://192.168.202.11"}, "DNS names or IP"),
+                 ({"TURN_HOST": "192.168.202.11:28322"}, "DNS names or IP"),
                  ({"PUBLIC_BIND_IP": "0.0.0.0"}, "--public"),
                  ({"ROOM_NETWORK_CIDR": "203.0.113.0/24"}, "RFC1918"),
                  ({"TURN_PRIVATE_IP": "172.29.70.255"}, "usable address"),

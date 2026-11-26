@@ -12,7 +12,7 @@ bash deploy/truenas/publish-to-tn.sh
 
 This thin wrapper invokes the existing `python3 scripts/release.py publish` incremental/cached, component-aware publisher, transfers `release.json`, and uses the existing SSH key to invoke TN's `update.py --release ...`. TN upgrades only the current App's Manager image; the Browser image is pre-pulled for later use. Current networking, ports, environment, volumes and image allowlist remain unchanged. Persistent rooms are not stopped or recreated. There is no additional media, CDP, clone or authentication regression matrix. The original configuration is backed up privately; if official `app.update` fails, the same API restores it.
 
-**TN currently retains its original direct topology at `http://192.168.202.11:28322/manage/`, using Owner credentials from the existing `rooms.env`.** Initial single-port migration is separate from routine image updates. The authorized NAS is `.202.11`; `truenas.lan` resolves to a different host at `.201.11` and must not be used for this migration. The single-port instructions below require a real DNS name pointing to the authorized endpoint; they are not routine release steps.
+**TN currently retains its original direct topology at `http://192.168.202.11:28322/manage/`, using Owner credentials from the existing `rooms.env`.** Initial single-port migration is separate from routine image updates. The authorized NAS is `.202.11`; `truenas.lan` resolves to a different host at `.201.11` and must not be used for this migration. The single-port instructions below accept a DNS name or literal IP, including `APP_HOST=192.168.202.11` with blank `TURN_HOST`. DNS is not a migration prerequisite. Chromium supports IP TURN/TLS with a trusted IP SAN; Firefox rejects numeric `turns:` URLs before TLS, but IP HTTPS and direct ICE remain usable.
 
 To apply an already published Manager on TN itself:
 
@@ -20,9 +20,9 @@ To apply an already published Manager on TN itself:
 sudo -n python3 /home/truenas_admin/neko-native-release/update.py --manager-image docker.io/ylangylang/neko-rooms:single-port
 ```
 
-Durable browser profiles live under the existing Manager storage mount. Upgrades register legacy managed directories in place without restarting browsers. Deployment removal retains the profile and Downloads; select that profile when creating a replacement. The separate **Profiles** action permanently deletes available profiles only. See [storage ownership and recovery](../../docs/storage.md).
+Durable browser profiles live under the existing Manager storage mount. Upgrades register legacy managed directories in place without restarting browsers. Deployment removal keeps the profile and Downloads by default; select that profile when creating a replacement. The removal confirmation offers an **unchecked** option to permanently delete only its Profile after the deployment is removed. The separate **Profiles** action also deletes available profiles only. See [storage ownership and recovery](../../docs/storage.md).
 
-## Initial native single-port deployment (correct DNS required)
+## Initial native single-port deployment (DNS or IP)
 
 The sole manifest source remains the independent **truenas-apps repository's root [`neko.compose.yaml`](https://github.com/ylang-ylang/truenas-apps/blob/main/neko.compose.yaml)**. Do not create another App or move it into a `neko/` subdirectory. The implementation comes from `examples/single-port-relay/`; its three proxy templates are preserved. Native Neko 3.2 UI, core and Chromium are not replaced with aggregate/MSE pages.
 
@@ -45,11 +45,11 @@ docker network inspect neko-rooms-net --format '{{json .IPAM.Config}}'
 
 Fill in the private `native-relay.settings`:
 
-1. `APP_HOST`: a DNS name clients actually resolve and reach at this TN/ingress. Leave `TURN_HOST` blank to reuse that FQDN; Firefox TURN/TLS rejects IP literals. Do not assume nip/sslip DNS works or modify hosts automatically.
+1. `APP_HOST`: a reachable DNS name or literal IP. For TN IP mode use `192.168.202.11`; blank `TURN_HOST` reuses it. Chromium IP TURN/TLS was verified with strict CA validation, video and selected `relayProtocol=tls`. Firefox numeric TURN/TLS is rejected with `TLS requires FQDN, not IP address`; this is not a server certificate error and does not prohibit IP HTTPS or direct ICE. A DNS TURN host remains an optional compatibility choice, not a deployment requirement. Do not modify client DNS/hosts automatically.
 2. `PUBLIC_BIND_IP`: defaults to the authorized NAS address `192.168.202.11`. Explicitly use `0.0.0.0` only when multiple listening interfaces are intended. DNS may point to another real NAS interface or an authorized TCP forwarder. **Its address need not literally match the bind IP, and this does not prove two addresses belong to one machine.** Workstation `truenas.lan`/`truenas` currently resolves to `192.168.201.11`; it is not the verified `.202.11` NAS.
 3. `PUBLIC_PORT=28322`: retains the existing external port. HTTPS and `turns:` must use this same port. Any later WAN exposure requires authorized raw TCP/L4 forwarding, not an HTTPS-only proxy/CDN.
 4. `ROOM_NETWORK_CIDR`: the inspected bridge subnet. `TURN_PRIVATE_IP`: a specifically unused static address inside it, never the gateway. The script inspects the existing network and does not create/reset it.
-5. Existing trusted certificate: set the actual NAS `TLS_CERT_FILE` fullchain and `TLS_KEY_FILE`. The certificate must cover both configured names; keep the key mode 0600. The script does not overwrite them.
+5. Existing trusted certificate: set the actual NAS `TLS_CERT_FILE` fullchain and `TLS_KEY_FILE`. The certificate must cover both configured hosts, using IP SANs for literals and DNS SANs for names; keep the key mode 0600. The script does not overwrite them.
 
 With an existing certificate:
 
@@ -57,7 +57,12 @@ With an existing certificate:
 python3 deploy/truenas/configure.py --compose-template "$manifest" --settings "$app/native-relay.settings" --public
 ```
 
-**LAN-only private CA mode:** leave both TLS fields blank and explicitly add `--dev-ca`. A real client-resolvable DNS name is still required. The script creates/reuses `native-relay/tls/`, without importing trust, changing DNS or replacing an existing CA/key. Clients must explicitly trust `native-relay/public/ca.crt`; it is the only public certificate downloadable at same-port `/ca.crt` and contains no private key. Leaf certificates last 30 days. To renew or change DNS, explicitly add `--renew-server-cert` to the same command; only the leaf certificate changes, retaining CA, keys and TURN credentials.
+**LAN-only private CA mode:** leave both TLS fields blank and explicitly add `--dev-ca`. IP mode generates an IP SAN and does not require a DNS name. The script creates/reuses `native-relay/tls/`, without importing trust, changing DNS or replacing an existing CA/key. Clients must explicitly trust `native-relay/public/ca.crt`; it is the only public certificate downloadable at same-port `/ca.crt` and contains no private key. Leaf certificates last 30 days. To renew or change configured hosts, explicitly add `--renew-server-cert` to the same command; only the leaf certificate changes, retaining CA, keys and TURN credentials.
+
+Manual client trust, performed by the user only:
+1. Download the public certificate from `http://192.168.202.11:28322/ca.crt` after deployment.
+2. Import it as a trusted website CA in the intended browser: Firefox **Certificates → Authorities → Import**, or Chromium's certificate manager. Never import the CA key or use a certificate-error bypass.
+3. Open `https://192.168.202.11:28322/manage/`. For Node/CDP clients, set `NODE_EXTRA_CA_CERTS` to that downloaded certificate before starting the client. The configurator does not import anything on user machines.
 
 The script generates **`/mnt/ylangsPool/appdata/neko/native-relay/neko.compose.yaml`**. Paste its complete contents into the existing TN **neko** App's YAML editor and save the update. **Do not paste repository source still containing `${...}`**: the TN editor does not read the checkout's `.env`. Generated YAML retains the flat layout and NAS absolute paths, without local cache dependencies. Original `rooms.env/neko.env` retain Compose dotenv semantics; TURN's `relay.env` uses Compose 2.30+ `format: raw`. Generation does not expand permanent passwords or start/stop services.
 

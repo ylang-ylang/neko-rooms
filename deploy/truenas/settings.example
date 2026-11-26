@@ -1,8 +1,9 @@
 # Copy to /mnt/ylangsPool/appdata/neko/native-relay.settings and chmod 600.
 # Literal KEY=value, NOT shell/dotenv; no inline comments/quote stripping.
 # No Owner/viewer password keys: existing rooms.env/neko.env remain authoritative.
-# REQUIRED: choose an actual DNS name resolving from your clients to TN/ingress.
-# One name is enough; blank TURN_HOST inherits APP_HOST. Never assume nip/sslip DNS.
+# REQUIRED: choose a reachable DNS name or IP (e.g. 192.168.202.11).
+# Blank TURN_HOST inherits APP_HOST. Chromium supports IP TURNS with an IP SAN;
+# Firefox rejects numeric TURNS URLs, but still supports IP HTTPS/direct ICE.
 APP_HOST=
 TURN_HOST=
 PUBLIC_PORT=28322

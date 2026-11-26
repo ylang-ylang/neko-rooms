@@ -82,17 +82,27 @@ def read_settings(path):
     return values
 
 
+def ip_literal(value):
+    try:
+        return ipaddress.ip_address(value)
+    except ValueError:
+        return None
+
+
 def hostname(value):
     host = value.lower()
+    address = ip_literal(host)
+    if address is not None:
+        return str(address)
     if len(host) > 253 or "." not in host or any(
         not re.fullmatch(r"[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?", label) for label in host.split(".")
     ):
-        fail("APP_HOST and TURN_HOST must be explicit DNS names without scheme/path/port")
-    try:
-        ipaddress.ip_address(host)
-    except ValueError:
-        return host
-    fail("TURN/TLS requires a client-resolvable DNS name, not an IP literal (Firefox)")
+        fail("APP_HOST and TURN_HOST must be DNS names or IP addresses without scheme/path/port")
+    return host
+
+
+def url_host(host):
+    return "[" + host + "]" if ":" in host else host
 
 
 def topology(values, dev_ca, public):
@@ -119,9 +129,9 @@ def topology(values, dev_ca, public):
         fail("RELEASE_PULL_POLICY must be always, missing or never")
     if dev_ca and (values["TLS_CERT_FILE"] or values["TLS_KEY_FILE"]):
         fail("--dev-ca cannot replace supplied TLS paths")
-    authority = values["APP_HOST"] + (":" + values["PUBLIC_PORT"] if values["PUBLIC_PORT"] != "443" else "")
+    authority = url_host(values["APP_HOST"]) + (":" + values["PUBLIC_PORT"] if values["PUBLIC_PORT"] != "443" else "")
     values.update(PUBLIC_AUTHORITY=authority, PUBLIC_ORIGIN="https://" + authority,
-                  HTTP_AUTHORITY=values["APP_HOST"] + (":" + values["PUBLIC_PORT"] if values["PUBLIC_PORT"] != "80" else ""),
+                  HTTP_AUTHORITY=url_host(values["APP_HOST"]) + (":" + values["PUBLIC_PORT"] if values["PUBLIC_PORT"] != "80" else ""),
                   ROOM_PEER_RANGE=f"{network.network_address + 1}-{network.broadcast_address - 1}",
                   TURN_RELAY_MIN="49160", TURN_RELAY_MAX="49259",
                   WEB_SNI_ROUTE=(values["APP_HOST"] + " 127.0.0.1:8443;" if values["APP_HOST"] != values["TURN_HOST"] else ""),
@@ -155,7 +165,7 @@ def check_network(network, turn_ip):
 def openssl(*args):
     result = subprocess.run(["openssl", *args], capture_output=True, text=True)
     if result.returncode:
-        fail("OpenSSL validation failed; check certificate/key, DNS SANs and expiry")
+        fail("OpenSSL validation failed; check certificate/key, DNS/IP SANs and expiry")
 
 
 def check_certificate(cert, key, values):
@@ -164,7 +174,7 @@ def check_certificate(cert, key, values):
     private_file(key, "TLS private key")
     ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER).load_cert_chain(cert, key, password="")
     for host in dict.fromkeys((values["APP_HOST"], values["TURN_HOST"])):
-        openssl("x509", "-in", str(cert), "-noout", "-checkhost", host)
+        openssl("x509", "-in", str(cert), "-noout", "-checkip" if ip_literal(host) is not None else "-checkhost", host)
     openssl("x509", "-in", str(cert), "-noout", "-checkend", "0")
 
 
@@ -196,7 +206,8 @@ def development_cert(state, values, renew=False):
             openssl("req", "-new", *key_args, "-subj", "/CN=" + values["APP_HOST"], "-out", str(temp / "server.csr"))
             (temp / "extensions").write_text("basicConstraints=critical,CA:FALSE\nkeyUsage=critical,digitalSignature,keyEncipherment\n"
                                             "extendedKeyUsage=serverAuth\nsubjectAltName=" + ",".join(
-                                                "DNS:" + h for h in dict.fromkeys((values["APP_HOST"], values["TURN_HOST"]))) + "\n")
+                                                ("IP:" if ip_literal(h) is not None else "DNS:") + h
+                                                for h in dict.fromkeys((values["APP_HOST"], values["TURN_HOST"]))) + "\n")
             openssl("x509", "-req", "-in", str(temp / "server.csr"), "-CA", str(ca / "ca.crt"),
                     "-CAkey", str(ca / "ca.key"), "-set_serial", str(secrets.randbits(159) or 1), "-days", "30",
                     "-extfile", str(temp / "extensions"), "-out", str(temp / "server.crt"))
@@ -316,7 +327,7 @@ def configure(settings, app_dir=APP_DIR, dev_ca=False, public=False, renew=False
         (public_dir / "ca.crt").chmod(0o644)
     values.update(NEKO_APP_DIR=str(app_dir), RELAY_STATE_DIR=str(state), TLS_CERT_FILE=str(cert), TLS_KEY_FILE=str(key),
                   TURN_USERNAME=saved["username"], TURN_PASSWORD=saved["password"])
-    ice = json.dumps([{"urls": [f"turns:{values['TURN_HOST']}:{values['PUBLIC_PORT']}?transport=tcp"],
+    ice = json.dumps([{"urls": [f"turns:{url_host(values['TURN_HOST'])}:{values['PUBLIC_PORT']}?transport=tcp"],
                        "username": saved["username"], "credential": saved["password"]}], separators=(",", ":"))
     private_write(state, "relay.env", "NEKO_ROOMS_RELAY_ICE_SERVERS_FRONTEND=" + ice + "\n")
     for name in ("nginx.conf", "turnserver.conf", "haproxy.cfg"):
