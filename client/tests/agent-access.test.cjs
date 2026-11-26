@@ -279,9 +279,22 @@ test('ported room defaults keep Profile/Downloads independent across instances a
   state.profiles = [{ id: 'available', name: 'Retained identity' }, { id: 'bound', name: 'Busy identity', room_id: 'existing', room_name: 'Original' }]
   assert.deepEqual(plain(first.profileOptions), [
     { text: 'Create a new durable profile', value: '' },
-    { text: 'Retained identity (available)', value: 'available', disabled: false },
-    { text: 'Busy identity (bound) — bound to Original', value: 'bound', disabled: true },
+    { text: 'Retained identity (available)', profileName: 'Retained identity', binding: 'Available — will reuse directly', value: 'available' },
+    { text: 'Busy identity (bound) — bound to Original', profileName: 'Busy identity', binding: 'In use by Original — will fork an independent copy', value: 'bound' },
   ])
+  first.data.profile_id = 'bound'
+  first.onProfileChange('bound')
+  assert.equal(first.selectedProfileBound, true)
+  assert.equal(first.willForkProfile, true)
+  first.data.profile_id = 'available'
+  first.onProfileChange('available')
+  assert.equal(first.selectedProfileBound, false)
+  assert.equal(first.willForkProfile, false)
+  first.data.clone_profile = true
+  assert.equal(first.willForkProfile, true)
+  first.data.profile_id = ''
+  first.onProfileChange('')
+  assert.equal(first.willForkProfile, false)
   assert.equal(second.data.mounts.length, 2)
   first.$refs.form = { resetValidation: () => undefined }
   first.Clear()

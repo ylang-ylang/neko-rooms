@@ -469,7 +469,7 @@ paths:
       tags:
         - rooms
       summary: Create new room
-      description: Creates a durable profile automatically when managed storage is enabled and profile_id is omitted. Existing profiles are exclusively bound until deployment removal; conflicting use returns 409 and unknown profile IDs return 404. Network/image/password/screen settings remain deployment-owned. Unsupported settings return 400; Docker failures remain 500.
+      description: Creates a durable profile automatically when managed storage is enabled and profile_id is omitted. Available profiles can be bound directly; set clone_profile to true with profile_id to fork an independent copy of any existing profile (bound or available). Conflicting direct reuse returns 409 and unknown profile IDs return 404. Network/image/password/screen settings remain deployment-owned. Unsupported settings return 400; Docker failures remain 500.
       operationId: roomCreate
       parameters:
         - in: query
@@ -1109,10 +1109,13 @@ components:
       properties:
         profile_id:
           type: string
-          description: Durable profile binding. On creation choose an available profile, or omit to create a new durable profile automatically.
+          description: Durable profile binding. On creation choose an existing profile (reused directly if available, or forked when clone_profile is true), or omit to create a new durable profile automatically.
         profile_name:
           type: string
-          description: Profile display name; on creation names a new profile when profile_id is omitted. Defaults to the deployment name.
+          description: Profile display name; on creation names a new or forked profile. Defaults to the deployment name.
+        clone_profile:
+          type: boolean
+          description: When true with profile_id, forks an independent copy of the selected profile (bound or available) instead of binding it directly.
         api_version:
           type: number
           description: If not set, version is taken from neko_image. Relay and HTTP networking require version 3.

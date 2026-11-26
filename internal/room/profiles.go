@@ -289,12 +289,98 @@ func (manager *RoomManagerCtx) containerProfile(container *dockerContainer.Inspe
 	return profileForContainer(registry, container.Config.Labels, container.Mounts, manager.config.StorageExternal), nil
 }
 
+func (manager *RoomManagerCtx) forkProfile(ctx context.Context, registry *profileRegistry, source *profileRecord, name string) (target *profileRecord, resultErr error) {
+	sourceRoot := filepath.Join(manager.config.StorageInternal, source.Root)
+	info, err := os.Lstat(sourceRoot)
+	if err != nil || !info.IsDir() {
+		return nil, fmt.Errorf("%w: source persistent profile storage is unavailable", types.ErrInvalidRoomSettings)
+	}
+	target, err = manager.newProfile(registry, name)
+	if err != nil {
+		return nil, err
+	}
+	targetRoot := filepath.Join(manager.config.StorageInternal, target.Root)
+	var staging string
+	committed, success := false, false
+	defer func() {
+		if success {
+			return
+		}
+		cleanup, cancel := context.WithTimeout(context.WithoutCancel(ctx), 20*time.Second)
+		defer cancel()
+		ownedPath := staging
+		if committed {
+			ownedPath = targetRoot
+		}
+		if ownedPath != "" {
+			if err := os.RemoveAll(ownedPath); err != nil {
+				resultErr = errors.Join(resultErr, errors.New("failed to remove incomplete forked profile storage"))
+				return
+			}
+		}
+		if err := manager.discardUnboundProfile(cleanup, target.ID); err != nil {
+			resultErr = errors.Join(resultErr, err)
+		}
+	}()
+	if err := os.Remove(targetRoot); err != nil {
+		return nil, errors.New("cannot prepare forked profile storage")
+	}
+	staging, err = os.MkdirTemp(filepath.Dir(targetRoot), ".fork-")
+	if err != nil {
+		return nil, errors.New("cannot reserve forked profile staging storage")
+	}
+	var cookies []map[string]json.RawMessage
+	var localStorage []*cloneFrame
+	if source.RoomID != "" {
+		container, err := manager.inspectContainer(ctx, source.RoomID)
+		if err != nil {
+			return nil, err
+		}
+		if container.State.Running && usesChromiumCheckpoint(container) {
+			cookies, localStorage, err = manager.snapshotLiveIdentity(ctx, container)
+			if err != nil {
+				return nil, err
+			}
+		}
+		if err := manager.snapshotSource(ctx, container, sourceRoot, staging); err != nil {
+			return nil, err
+		}
+	} else {
+		if err := snapshotTree(ctx, sourceRoot, staging); err != nil {
+			return nil, errors.New("failed to snapshot managed room storage")
+		}
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	if err := commitSnapshot(staging, targetRoot); err != nil {
+		return nil, errors.New("cannot atomically commit forked profile storage")
+	}
+	committed = true
+	if cookies != nil {
+		if err := atomicPrivateJSON(filepath.Join(targetRoot, identityCheckpoint), profileIdentity{cookies, localStorage}); err != nil {
+			return nil, err
+		}
+	}
+	if len(source.Mounts) > 0 {
+		target.Mounts = append([]types.RoomMount(nil), source.Mounts...)
+		if err := manager.saveProfiles(registry); err != nil {
+			return nil, err
+		}
+	}
+	success = true
+	return target, nil
+}
+
 func (manager *RoomManagerCtx) prepareProfile(ctx context.Context, settings *types.RoomSettings) (*profileRecord, error) {
 	if !manager.config.StorageEnabled {
-		if settings.ProfileID != "" || settings.ProfileName != "" {
+		if settings.ProfileID != "" || settings.ProfileName != "" || settings.CloneProfile {
 			return nil, fmt.Errorf("%w: persistent profiles require managed storage", types.ErrInvalidRoomSettings)
 		}
 		return nil, nil
+	}
+	if settings.CloneProfile && settings.ProfileID == "" {
+		return nil, fmt.Errorf("%w: clone_profile requires an existing profile_id", types.ErrInvalidRoomSettings)
 	}
 	registry, err := manager.reconcileProfiles(ctx)
 	if err != nil {
@@ -304,7 +390,18 @@ func (manager *RoomManagerCtx) prepareProfile(ctx context.Context, settings *typ
 	if settings.ProfileID != "" && profile == nil {
 		return nil, types.ErrProfileNotFound
 	}
-	if profile != nil && profile.RoomID != "" {
+	if profile != nil && settings.CloneProfile {
+		name := settings.ProfileName
+		if name == "" {
+			name = settings.Name
+		}
+		profile, err = manager.forkProfile(ctx, registry, profile, name)
+		if err != nil {
+			return nil, err
+		}
+		settings.ProfileName = ""
+		settings.CloneProfile = false
+	} else if profile != nil && profile.RoomID != "" {
 		return nil, types.ErrProfileInUse
 	}
 	if profile == nil {

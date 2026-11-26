@@ -32,8 +32,8 @@
         <template v-if="storageEnabled">
           <v-select v-model="data.profile_id" :items="profileOptions" label="Browser profile" class="browser-profile-select"
             :menu-props="{ maxWidth: 'min(552px, calc(100vw - 96px))', maxHeight: 360, contentClass: 'browser-profile-menu' }"
-            hint="Exclusive binding lasts until deployment removal, even while stopped. Removing a deployment keeps its profile and Downloads."
-            persistent-hint :disabled="profilesLoading">
+            :hint="profileHint"
+            persistent-hint :disabled="profilesLoading" @change="onProfileChange">
             <template v-slot:selection="{ item }">
               <span class="profile-selection" :title="item.text">{{ item.profileName || item.text }}</span>
             </template>
@@ -46,8 +46,13 @@
               </v-list-item>
             </template>
           </v-select>
-          <v-text-field v-if="!data.profile_id" v-model="data.profile_name" label="New profile name (optional)"
-            maxlength="120" hint="Defaults to the deployment name. A durable profile is always created." persistent-hint />
+          <v-checkbox v-if="data.profile_id && !selectedProfileBound" v-model="data.clone_profile"
+            label="Fork an independent copy instead of reusing directly" hide-details class="mt-2" />
+          <v-text-field v-if="!data.profile_id || willForkProfile" v-model="data.profile_name"
+            :label="willForkProfile ? 'Forked profile name (optional)' : 'New profile name (optional)'"
+            maxlength="120"
+            :hint="willForkProfile ? 'Defaults to the deployment name. Copies cookies, extensions, storage and Downloads into a new independent profile.' : 'Defaults to the deployment name. A durable profile is always created.'"
+            persistent-hint />
           <v-alert v-if="profilesError" type="error" dense outlined>{{ profilesError }}</v-alert>
         </template>
 
@@ -700,14 +705,51 @@ export default class RoomsCreate extends Vue {
     })
   }
 
+  get selectedProfile(): BrowserProfile | undefined {
+    if (!this.data.profile_id) return undefined
+    return this.$store.state.profiles.find((p: BrowserProfile) => p.id === this.data.profile_id)
+  }
+
+  get selectedProfileBound(): boolean {
+    return Boolean(this.selectedProfile && this.selectedProfile.room_id)
+  }
+
+  get willForkProfile(): boolean {
+    return Boolean(this.data.profile_id && (this.selectedProfileBound || this.data.clone_profile))
+  }
+
+  get profileHint(): string {
+    if (this.selectedProfileBound && this.selectedProfile) {
+      return `Bound to ${this.selectedProfile.room_name} — will automatically fork an independent copy (cookies, extensions & Downloads) without touching the original room.`
+    }
+    if (this.data.profile_id && this.data.clone_profile) {
+      return 'Will fork an independent copy of this profile and leave the original untouched.'
+    }
+    if (this.data.profile_id) {
+      return 'Available — will bind and reuse this profile directory directly.'
+    }
+    return 'Pick any existing profile (available profiles are reused directly; bound profiles automatically fork an independent copy) or create a new one.'
+  }
+
+  onProfileChange(value: string) {
+    if (!value) {
+      this.data.clone_profile = false
+      return
+    }
+    const chosen = this.$store.state.profiles.find((p: BrowserProfile) => p.id === value)
+    this.data.clone_profile = Boolean(chosen && chosen.room_id)
+  }
+
   get profileOptions() {
     return [
       { text: 'Create a new durable profile', value: '' },
       ...this.$store.state.profiles.map((profile: BrowserProfile) => ({
         text: `${profile.name} (${profile.id})${profile.room_id ? ' — bound to ' + profile.room_name : ''}`,
         profileName: profile.name,
-        binding: profile.room_id ? `Bound to ${profile.room_name}` : 'Available',
-        value: profile.id, disabled: !!profile.room_id,
+        binding: profile.room_id
+          ? `In use by ${profile.room_name} — will fork an independent copy`
+          : 'Available — will reuse directly',
+        value: profile.id,
       })),
     ]
   }
@@ -765,6 +807,10 @@ export default class RoomsCreate extends Vue {
 
       await this.$store.dispatch(start ? 'ROOMS_CREATE_AND_START' : 'ROOMS_CREATE', {
         ...this.data,
+        // eslint-disable-next-line
+        clone_profile: this.willForkProfile,
+        // eslint-disable-next-line
+        profile_name: (!this.data.profile_id || this.willForkProfile) ? this.data.profile_name : '',
         // eslint-disable-next-line
         user_pass: this.data.user_pass || randomPassword(),
         // eslint-disable-next-line

@@ -40,6 +40,8 @@ export const state = {
     // eslint-disable-next-line
     profile_name: '',
     // eslint-disable-next-line
+    clone_profile: false,
+    // eslint-disable-next-line
     neko_image: '',
     // eslint-disable-next-line
     max_connections: 10,

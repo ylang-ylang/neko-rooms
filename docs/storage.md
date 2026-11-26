@@ -43,7 +43,7 @@ Inside storage path (e.g. `/opt/neko-rooms/data`) there will be available these 
 
 ## Durable browser profiles
 
-Use **Profiles** in the Manager UI to create/list profiles and explicitly delete an available profile. **Add room** can select an available profile or create a new one. Omitting `profile_id` creates a durable profile automatically, including Quick room. A profile has its own stable ID and display name; image, screen, networking and room passwords belong to the deployment, not the profile.
+Use **Profiles** in the Manager UI to create/list profiles and explicitly delete an available profile. **Add room** can select any existing profile (reusing an available profile directly, or automatically forking an independent copy when a profile is already bound to another room) or create a new one. Omitting `profile_id` creates a durable profile automatically, including Quick room. A profile has its own stable ID and display name; image, screen, networking and room passwords belong to the deployment, not the profile.
 
 Each profile has one exclusive deployment binding, including while the deployment is stopped. Remove that deployment to release the profile. Creating another deployment with a bound profile returns **409**. Deployment removal keeps its profile and Downloads **by default**. To transfer browser identity, leave the removal dialog's permanent-deletion checkbox unchecked, then select the retained profile when creating a replacement.
 
@@ -62,7 +62,7 @@ Owner-only API paths (relative to `admin.path_prefix`):
 - `GET /api/profiles`: public ownership metadata only, including available retained profiles.
 - `POST /api/profiles` with `{"name":"Work account"}`: create an available profile.
 - `DELETE /api/profiles/ID`: explicitly delete an available profile and all its data.
-- `POST /api/rooms` with `profile_id`: bind an available profile. Omit it to create a new durable profile, optionally named by `profile_name`.
+- `POST /api/rooms` with `profile_id`: bind an available profile directly, or set `clone_profile: true` to fork an independent copy of any existing profile (bound or unbound; optionally named by `profile_name`). Omit `profile_id` to create a new durable profile, optionally named by `profile_name`.
 
 These are Manager Owner operations, not native viewer or Agent Bearer operations. Existing passwords, CA/keys and Agent authorization remain separate.
 

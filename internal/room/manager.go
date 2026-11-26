@@ -367,25 +367,9 @@ func (manager *RoomManagerCtx) create(ctx context.Context, settings types.RoomSe
 	} else if !errors.Is(err, types.ErrRoomNotFound) {
 		return "", err
 	}
-	autoProfile := settings.ProfileID == ""
-	profile, err := manager.prepareProfile(ctx, &settings)
-	if err != nil {
-		return "", err
-	}
-	defer func() {
-		if resultErr == nil || profile == nil || !autoProfile {
-			return
-		}
-		cleanup, cancel := context.WithTimeout(context.WithoutCancel(ctx), 20*time.Second)
-		defer cancel()
-		if err := manager.discardUnboundProfile(cleanup, profile.ID); err != nil && !errors.Is(err, types.ErrProfileInUse) {
-			resultErr = errors.Join(resultErr, err)
-		}
-	}()
-	containerName := manager.config.InstanceName + "-" + roomName
 
 	//
-	// Allocate ports
+	// Allocate ports before creating or forking profile storage.
 	//
 
 	portsNeeded := settings.MaxConnections
@@ -397,6 +381,23 @@ func (manager *RoomManagerCtx) create(ctx context.Context, settings types.RoomSe
 	if err != nil {
 		return "", err
 	}
+
+	createdProfile := settings.ProfileID == "" || settings.CloneProfile
+	profile, err := manager.prepareProfile(ctx, &settings)
+	if err != nil {
+		return "", err
+	}
+	defer func() {
+		if resultErr == nil || profile == nil || !createdProfile {
+			return
+		}
+		cleanup, cancel := context.WithTimeout(context.WithoutCancel(ctx), 20*time.Second)
+		defer cancel()
+		if err := manager.discardUnboundProfile(cleanup, profile.ID); err != nil && !errors.Is(err, types.ErrProfileInUse) {
+			resultErr = errors.Join(resultErr, err)
+		}
+	}()
+	containerName := manager.config.InstanceName + "-" + roomName
 
 	// The allocated range is still private per-room capacity in relay mode;
 	// only direct mode publishes it on the Docker host.
@@ -1252,6 +1253,9 @@ func (manager *RoomManagerCtx) Recreate(ctx context.Context, id string, settings
 	source, err := manager.inspectContainer(ctx, id)
 	if err != nil {
 		return nil, err
+	}
+	if settings.CloneProfile {
+		return nil, fmt.Errorf("%w: clone_profile is not supported during recreate", types.ErrInvalidRoomSettings)
 	}
 	if settings.ProfileID != "" {
 		profile := findProfile(registry, settings.ProfileID)

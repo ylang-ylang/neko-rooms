@@ -77,8 +77,9 @@ type RoomResources struct {
 }
 
 type RoomSettings struct {
-	ProfileID   string `json:"profile_id,omitempty"`
-	ProfileName string `json:"profile_name,omitempty"` // used only when creating a new profile
+	ProfileID    string `json:"profile_id,omitempty"`
+	ProfileName  string `json:"profile_name,omitempty"`  // used when creating or forking a profile
+	CloneProfile bool   `json:"clone_profile,omitempty"` // fork an independent copy of ProfileID instead of sharing it
 
 	ApiVersion int `json:"api_version"`
 

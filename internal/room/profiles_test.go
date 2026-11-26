@@ -232,3 +232,85 @@ func TestOptionalProfileRestoreFailureKeepsDeploymentRunning(t *testing.T) {
 		})
 	}
 }
+
+func TestCreateForksBoundRunningAndUnboundProfiles(t *testing.T) {
+	manager, fake, id, sourceRoot := cloneFixture(t, config.NetworkModeDirect)
+	fakeCloneBrowser(t, manager)
+	ctx := context.Background()
+	fake.mu.Lock()
+	for fullID, c := range fake.containers {
+		c.Config.Image = "owned-chromium-cdp:test"
+		fake.containers[fullID] = c
+	}
+	fake.mu.Unlock()
+
+	sourceEntry, err := manager.GetEntry(ctx, id)
+	if err != nil || sourceEntry.ProfileID == "" {
+		t.Fatalf("missing source profile: %v", err)
+	}
+
+	// 1. clone_profile without profile_id is rejected.
+	invalid := networkSettings("invalid-fork")
+	invalid.CloneProfile = true
+	if _, err := manager.Create(ctx, invalid); !errors.Is(err, types.ErrInvalidRoomSettings) {
+		t.Fatalf("expected ErrInvalidRoomSettings for empty profile_id fork, got %v", err)
+	}
+
+	// 2. Forking a bound running profile creates an independent profile, preserves source,
+	// copies mounted files, and checkpoints live Chromium identity.
+	forkSettings := networkSettings("forked-live")
+	forkSettings.ProfileID = sourceEntry.ProfileID
+	forkSettings.ProfileName = "Forked From Live"
+	forkSettings.CloneProfile = true
+	forkID, err := manager.Create(ctx, forkSettings)
+	if err != nil {
+		t.Fatalf("forking bound running profile failed: %v", err)
+	}
+	forkEntry, err := manager.GetEntry(ctx, forkID)
+	if err != nil {
+		t.Fatalf("reading forked room failed: %v", err)
+	}
+	if forkEntry.ProfileID == "" || forkEntry.ProfileID == sourceEntry.ProfileID {
+		t.Fatalf("forked room reused source profile ID %q", forkEntry.ProfileID)
+	}
+	if forkEntry.ProfileName != "Forked From Live" {
+		t.Fatalf("unexpected forked profile name %q", forkEntry.ProfileName)
+	}
+	forkRoot := filepath.Join(manager.config.StorageInternal, profileStoragePath, forkEntry.ProfileID)
+	if data, err := os.ReadFile(filepath.Join(forkRoot, "profile/Local State")); err != nil || string(data) != "opaque profile identity" {
+		t.Fatalf("forked profile missing copied identity: %v %q", err, string(data))
+	}
+	if _, err := os.Stat(filepath.Join(forkRoot, identityCheckpoint)); err != nil {
+		t.Fatalf("forked live profile missing identity checkpoint: %v", err)
+	}
+	// Source profile and data remain intact and bound to original room.
+	if data, _ := os.ReadFile(filepath.Join(sourceRoot, "profile/Local State")); string(data) != "opaque profile identity" {
+		t.Fatal("source profile data was altered")
+	}
+
+	// 3. Removing the source room unbinds the original profile; forking an unbound profile
+	// also produces a new independent copy while keeping the original unbound.
+	if err := manager.Remove(ctx, id); err != nil {
+		t.Fatalf("removing source room failed: %v", err)
+	}
+	unboundFork := networkSettings("forked-unbound")
+	unboundFork.ProfileID = sourceEntry.ProfileID
+	unboundFork.CloneProfile = true
+	unboundForkID, err := manager.Create(ctx, unboundFork)
+	if err != nil {
+		t.Fatalf("forking unbound profile failed: %v", err)
+	}
+	unboundForkEntry, err := manager.GetEntry(ctx, unboundForkID)
+	if err != nil || unboundForkEntry.ProfileID == sourceEntry.ProfileID || unboundForkEntry.ProfileName != "forked-unbound" {
+		t.Fatalf("unexpected unbound fork result: %+v err=%v", unboundForkEntry, err)
+	}
+	profiles, err := manager.ListProfiles(ctx)
+	if err != nil || len(profiles) != 3 {
+		t.Fatalf("expected 3 independent profiles, got %d (%v)", len(profiles), err)
+	}
+	for _, p := range profiles {
+		if p.ID == sourceEntry.ProfileID && p.RoomID != "" {
+			t.Fatalf("original unbound profile unexpectedly bound to %q", p.RoomID)
+		}
+	}
+}

@@ -595,10 +595,12 @@ export interface RoomSettings {
      * @memberof RoomSettings
      */
     'browser_policy'?: BrowserPolicy;
-    /** Durable profile binding. On creation choose an available profile, or omit to create a new durable profile automatically. */
+    /** Durable profile binding. On creation choose an existing profile (reused directly if available, or forked when clone_profile is true), or omit to create a new durable profile automatically. */
     'profile_id'?: string;
-    /** Profile display name; on creation names a new profile when profile_id is omitted. Defaults to the deployment name. */
+    /** Profile display name; on creation names a new or forked profile. Defaults to the deployment name. */
     'profile_name'?: string;
+    /** When true with profile_id, forks an independent copy of the selected profile (bound or available) instead of binding it directly. */
+    'clone_profile'?: boolean;
 }
 /**
  * 

@@ -21,12 +21,16 @@ for (const name of ['BrowserProfile', 'ProfileCreateRequest']) {
   const anchor = '/**\n * \n * @export\n * @interface BrowserPolicy\n'
   output = output.replace(anchor, `export interface ${name} {\n${properties}\n}\n` + anchor)
 }
-for (const model of ['RoomEntry', 'RoomSettings']) {
+for (const [model, fields] of [['RoomEntry', ['profile_id', 'profile_name']], ['RoomSettings', ['profile_id', 'profile_name', 'clone_profile']]]) {
   output = output.replace(new RegExp(`(export interface ${model} \\{\\n)([\\s\\S]*?)(\\n\\})`), (_, start, body, end) => {
-    for (const field of ['profile_id', 'profile_name']) {
-      body = body.replace(new RegExp(`    /\\*\\* [^\\n]* \\*/\\n    '${field}'\\?: string;\\n?`, 'g'), '')
+    for (const field of fields) {
+      body = body.replace(new RegExp(`    /\\*\\* [^\\n]* \\*/\\n    '${field}'\\?: (?:string|boolean);\\n?`, 'g'), '')
     }
-    const properties = ['profile_id', 'profile_name'].map(field => `    /** ${spec.components.schemas[model].properties[field].description} */\n    '${field}'?: string;\n`).join('')
+    const properties = fields.map(field => {
+      const schema = spec.components.schemas[model].properties[field]
+      const tsType = schema.type === 'boolean' ? 'boolean' : 'string'
+      return `    /** ${schema.description} */\n    '${field}'?: ${tsType};\n`
+    }).join('')
     return start + body.trimEnd() + '\n' + properties.trimEnd() + end
   })
 }
