@@ -9,7 +9,7 @@
   const dismissKey = 'neko-tls-ca-notice-dismissed:' + location.origin + ':' + caPath;
   const states = new Set();
   const watched = new WeakMap();
-  let banner = null, dismissed = false;
+  let banner = null, pill = null, dismissed = false, lastState = null;
   const element = (tag, text) => {
     const node = document.createElement(tag);
     if (text) node.textContent = text;
@@ -24,10 +24,34 @@
     node.style.cssText = 'display:inline-block;margin:8px 18px 0 0;color:#173e73;text-decoration:underline;font-weight:700';
     return node;
   };
-  const hide = () => { if (banner) banner.remove(); banner = null; };
+  const hideBanner = () => { if (banner) banner.remove(); banner = null; };
+  const hidePill = () => { if (pill) pill.remove(); pill = null; };
+  const hide = () => { hideBanner(); hidePill(); };
   const working = () => [...states].some(s => !s.closed && (s.relay || s.connected));
+  const showPill = state => {
+    if (pill || banner || (surface !== 'manage' && working())) return;
+    lastState = state || lastState || {};
+    pill = element('button', surface === 'manage'
+      ? '⚠ Private CA required for HTTPS video — Click for CA command'
+      : '⚠ TURN/TLS failed (CA untrusted) — Click to fix');
+    pill.type = 'button';
+    pill.setAttribute('data-neko-tls-warning-pill', '');
+    pill.setAttribute('role', 'status');
+    pill.style.cssText = 'position:fixed;z-index:100000;top:10px;right:14px;padding:8px 14px;border:2px solid #b56e00;border-radius:999px;background:#ffd24d;color:#241900;box-shadow:0 4px 16px #0006;font:700 13px/1.3 system-ui,sans-serif;cursor:pointer';
+    pill.addEventListener('click', () => {
+      dismissed = false;
+      if (surface === 'manage') { try { localStorage.removeItem(dismissKey); } catch {} }
+      hidePill();
+      show(lastState);
+    });
+    (document.body || document.documentElement).append(pill);
+  };
   const show = state => {
-    if (dismissed || banner || (surface !== 'manage' && working())) return;
+    lastState = state || lastState || {};
+    if (surface !== 'manage' && working()) return;
+    if (dismissed) { showPill(lastState); return; }
+    if (banner) return;
+    hidePill();
     banner = element('aside');
     banner.setAttribute('data-neko-tls-warning', '');
     banner.setAttribute('role', 'alert');
@@ -39,14 +63,15 @@
     close.addEventListener('click', () => {
       dismissed = true;
       if (surface === 'manage') { try { localStorage.setItem(dismissKey, '1'); } catch {} }
-      hide();
+      hideBanner();
+      showPill(lastState);
     });
     const title = surface === 'manage'
       ? 'Private CA required for HTTPS room video (TURN/TLS)'
       : 'TURN/TLS connection failed — check certificate trust';
     banner.append(close, element('strong', title));
     banner.append(element('p', 'Continuing past an HTTPS warning does not install its CA. If you skipped that warning, your browser may still reject TURN/TLS. Import this deployment’s CA and fully restart the browser. DNS, network or server failures can also produce this error.'));
-    if (state.firefoxIP) banner.append(element('p', 'Firefox also requires a DNS hostname for TURN/TLS. Importing a CA cannot fix an IP-address TURNS URL.'));
+    if (lastState.firefoxIP) banner.append(element('p', 'Firefox also requires a DNS hostname for TURN/TLS. Importing a CA cannot fix an IP-address TURNS URL.'));
     const ca = link('Download private CA', caPath, 'https:');
     if (ca) { ca.download = 'neko-private-ca.crt'; banner.append(ca); }
     else banner.append(element('p', 'No CA download is configured. Ask this deployment’s administrator for its CA certificate.'));
@@ -57,12 +82,13 @@
       const safeName = host.replace(/[^a-zA-Z0-9.-]/g, '-');
       const httpCaUrl = 'http://' + host + caPath;
       const cmds = {
-        linux: 'curl --noproxy "*" -fsS ' + httpCaUrl + ' -o /tmp/neko-ca.crt && mkdir -p "$HOME/.pki/nssdb" && certutil -d "sql:$HOME/.pki/nssdb" -A -t "C,," -n "Neko CA ' + safeName + '" -i /tmp/neko-ca.crt',
+        linuxChrome: 'curl --noproxy "*" -fsS ' + httpCaUrl + ' -o /tmp/neko-ca.crt && mkdir -p "$HOME/.pki/nssdb" && ([ -f "$HOME/.pki/nssdb/cert9.db" ] || certutil -d "sql:$HOME/.pki/nssdb" -N --empty-password) && certutil -d "sql:$HOME/.pki/nssdb" -A -t "C,," -n "Neko CA ' + safeName + '" -i /tmp/neko-ca.crt',
+        linuxSystem: 'curl --noproxy "*" -fsS ' + httpCaUrl + ' -o /tmp/neko-ca.crt && sudo install -m 644 /tmp/neko-ca.crt /usr/local/share/ca-certificates/neko-' + safeName + '.crt && sudo update-ca-certificates && for f in "$HOME"/.mozilla/firefox/*/cert9.db "$HOME"/snap/firefox/common/.mozilla/firefox/*/cert9.db; do [ -f "$f" ] && certutil -d "sql:$(dirname "$f")" -A -t "C,," -n "Neko CA ' + safeName + '" -i /tmp/neko-ca.crt; done',
         macos: 'curl --noproxy "*" -fsS ' + httpCaUrl + ' -o /tmp/neko-ca.crt && sudo security add-trusted-cert -d -r trustRoot -k /Library/Keychains/System.keychain /tmp/neko-ca.crt',
         windows: 'curl.exe --noproxy "*" -fsS ' + httpCaUrl + ' -o "$env:TEMP\\neko-ca.crt"; certutil -addstore -f Root "$env:TEMP\\neko-ca.crt"',
       };
       const ua = navigator.userAgent || '';
-      let activeOs = /Windows/i.test(ua) ? 'windows' : (/Macintosh|Mac OS X/i.test(ua) ? 'macos' : 'linux');
+      let activeOs = /Windows/i.test(ua) ? 'windows' : (/Macintosh|Mac OS X/i.test(ua) ? 'macos' : 'linuxChrome');
       const cliBox = element('div');
       cliBox.style.cssText = 'margin:10px 0 8px;padding:10px 12px;border-radius:8px;background:#fff8dc;border:1px solid #d4a64a';
       const cliHead = element('div');
@@ -79,7 +105,7 @@
             (k === os ? 'background:#b56e00;color:#fff;font-weight:700' : 'background:#fff;color:#241900');
         }
       };
-      for (const [k, label] of [['linux', 'Linux'], ['macos', 'macOS'], ['windows', 'Windows']]) {
+      for (const [k, label] of [['linuxChrome', 'Linux (Chrome)'], ['linuxSystem', 'Linux (System + Firefox)'], ['macos', 'macOS'], ['windows', 'Windows']]) {
         const btn = element('button', label);
         btn.type = 'button';
         btn.addEventListener('click', () => renderOs(k));
@@ -110,11 +136,19 @@
     banner.append(instructions);
     (document.body || document.documentElement).append(banner);
   };
+  // Help controls must not forward keyboard input into the remote desktop.
+  for (const type of ['keydown', 'keyup', 'keypress']) document.addEventListener(type, event => {
+    if (event.target.closest && event.target.closest('[data-neko-tls-warning],[data-neko-tls-warning-pill]')) event.stopImmediatePropagation();
+  }, true);
   if (surface === 'manage') {
     let alreadyDismissed = false;
     try { alreadyDismissed = localStorage.getItem(dismissKey) === '1'; } catch {}
-    if (!alreadyDismissed && caPath) {
-      const mount = () => show({firefoxIP: /Firefox\//.test(navigator.userAgent) && /^(?:\[|\d+\.\d+\.\d+\.\d+$)/.test(location.hostname || '')});
+    if (caPath) {
+      const initState = {firefoxIP: /Firefox\//.test(navigator.userAgent) && /^(?:\[|\d+\.\d+\.\d+\.\d+$)/.test(location.hostname || '')};
+      const mount = () => {
+        if (alreadyDismissed) { dismissed = true; showPill(initState); }
+        else show(initState);
+      };
       if (document.readyState === 'loading' && document.addEventListener) {
         document.addEventListener('DOMContentLoaded', mount, {once: true});
       } else {
@@ -123,10 +157,6 @@
     }
     return;
   }
-  // Help controls must not forward keyboard input into the remote desktop.
-  for (const type of ['keydown', 'keyup', 'keypress']) document.addEventListener(type, event => {
-    if (event.target.closest && event.target.closest('[data-neko-tls-warning]')) event.stopImmediatePropagation();
-  }, true);
   const urls = config => (config && config.iceServers || []).flatMap(s => s.urls || s.url || []).filter(u => typeof u === 'string' && /^turns:/i.test(u));
   const observe = (pc, config) => {
     const turnURLs = urls(config);
