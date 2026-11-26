@@ -74,6 +74,35 @@ class UpdateTests(unittest.TestCase):
         return [dict(fields, name="/ix-neko-neko-1", project="ix-neko"),
                 dict(fields, name="/tn-neko-rooms-work", project=None)]
 
+    def test_migration_can_remove_legacy_services_and_keep_external_rooms(self):
+        original = self.original()
+        rendered = {"services": {"neko-rooms": {"image": "channel", "environment": {"MODE": "relay"}},
+                                 "room-image": {"image": "channel"}, "gateway": {"image": "gateway@sha256:pinned"}}}
+        result = update.prepare_config(original, "manager-new", "browser-new", rendered)
+        self.assertNotIn("neko", result["services"])
+        self.assertNotIn("cdp-proxy", result["services"])
+        self.assertNotIn("configs", result)
+        self.assertEqual(result["services"]["room-image"]["image"], "browser-new")
+        self.assertEqual(result["services"]["neko-rooms"]["image"], "manager-new")
+
+        # Subsequent migration when original already has no legacy services also succeeds.
+        again = update.prepare_config(result, "manager-v2", "browser-v2", rendered)
+        self.assertEqual(again["services"]["neko-rooms"]["image"], "manager-v2")
+        self.assertEqual(again["services"]["room-image"]["image"], "browser-v2")
+
+    def test_default_removal_preserves_external_rooms_and_rejects_leftover_default(self):
+        before = self.rows() + [dict(self.rows()[0], name="/ix-neko-cdp-proxy-1")]
+        only_external = [copy.deepcopy(before[1])]
+        self.assertEqual(update.assert_preserved(before, only_external, True, allow_default_removal=True),
+                         ["/tn-neko-rooms-work"])
+        # Zero external rooms after legacy removal is allowed when legacy containers are gone.
+        self.assertEqual(update.assert_preserved([before[0]], [], True, allow_default_removal=True), [])
+        with self.assertRaisesRegex(RuntimeError, "ix-neko-neko-1"):
+            update.assert_preserved(before, copy.deepcopy(before[:2]), True, allow_default_removal=True)
+        with self.assertRaisesRegex(RuntimeError, "ix-neko-cdp-proxy-1"):
+            update.assert_preserved(before, [copy.deepcopy(before[1]), copy.deepcopy(before[2])], True,
+                                    allow_default_removal=True)
+
     def test_only_authorized_default_identity_may_change(self):
         before = self.rows()
         after = copy.deepcopy(before)

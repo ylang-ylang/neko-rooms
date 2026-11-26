@@ -143,12 +143,12 @@ class ConfigurationTests(unittest.TestCase):
         self.assertEqual(services["room-image"]["network_mode"], "none")
         self.assertEqual(services["room-image"]["entrypoint"], ["/bin/true"])
         self.assertFalse(services["room-image"].get("volumes"))
+        self.assertNotIn("neko", services)
+        self.assertNotIn("cdp-proxy", services)
         for name in ("neko-rooms", "turn", "classifier", "room-image"):
             self.assertFalse(services[name].get("ports"), name)
         published = {(p["published"], p["protocol"]) for s in services.values() for p in s.get("ports", [])}
-        expected = {("28320", "tcp"), ("28321", "tcp"), ("22222", "tcp")}
-        expected.update((str(p), "udp") for p in range(52100, 52111))
-        self.assertEqual(published, expected)
+        self.assertEqual(published, {("22222", "tcp")})
         self.assertEqual(services["gateway"]["ports"][0]["host_ip"], "127.0.0.1")
         self.assertEqual(model["networks"]["rooms"]["name"], "neko-rooms-net")
         self.assertTrue(model["networks"]["rooms"]["external"])
@@ -156,9 +156,6 @@ class ConfigurationTests(unittest.TestCase):
             self.assertIn("@sha256:", services[name]["image"])
         for name, content in self.files.items():
             self.assertEqual((self.app / name).read_text(), content, name)
-        mounts = {v["target"]: v["source"] for v in services["neko"]["volumes"]}
-        self.assertEqual(mounts["/home/neko/profile"], str(self.app / "profile"))
-        self.assertEqual(mounts["/home/neko/Downloads"], str(self.app / "downloads"))
         ice = json.loads(manager["environment"]["NEKO_ROOMS_RELAY_ICE_SERVERS_FRONTEND"])
         saved = json.loads((state / "turn-credentials.json").read_text())
         self.assertEqual(ice[0]["urls"], ["turns:neko.private.test:22222?transport=tcp"])
@@ -363,6 +360,17 @@ class ConfigurationTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "unowned"):
             self.configure()
         self.assertEqual((self.app / "neko.env").read_text(), self.files["neko.env"])
+
+    def test_legacy_free_manifest_does_not_require_legacy_files(self):
+        for rel in ("neko.env", "cdp.htpasswd", "config/chromium.conf", "config/chromium-policies.json",
+                    "profile/existing", "downloads/existing"):
+            (self.app / rel).unlink()
+        for d in ("profile", "downloads", "config"):
+            (self.app / d).rmdir()
+        state = self.configure()
+        services = self.model(state / "neko.compose.yaml")["services"]
+        self.assertNotIn("neko", services)
+        self.assertNotIn("cdp-proxy", services)
 
     def test_missing_data_and_permanent_auth_are_not_replaced(self):
         (self.app / "rooms.env").unlink()

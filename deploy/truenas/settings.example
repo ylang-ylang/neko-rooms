@@ -1,6 +1,6 @@
 # Copy to /mnt/ylangsPool/appdata/neko/native-relay.settings and chmod 600.
 # Literal KEY=value, NOT shell/dotenv; no inline comments/quote stripping.
-# No Owner/viewer password keys: existing rooms.env/neko.env remain authoritative.
+# No Owner password keys: existing rooms.env remains authoritative (archived neko.env is untouched).
 # REQUIRED: choose a reachable DNS name or IP (e.g. 192.168.202.11).
 # Default plain: HTTP/WS + TURN/TCP, no certificates/imports. TLS is opt-in.
 # Blank TURN_HOST inherits APP_HOST. For TLS, Firefox requires a DNS TURN host.

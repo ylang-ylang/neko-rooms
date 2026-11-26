@@ -312,13 +312,21 @@ def configure(settings, app_dir=APP_DIR, dev_ca=False, public=False, renew=False
     if app_dir.is_relative_to(ROOT):
         fail("NAS private app state must be outside the source checkout")
     # Existing files/data are preconditions, never new defaults or migration targets.
-    for name in ("neko.env", "rooms.env"):
-        private_file(app_dir / name, "existing permanent authentication")
-    for name in ("rooms-data", "profile", "downloads"):
-        if not (app_dir / name).is_dir():
+    active_yaml = "\n".join(
+        line.split("#", 1)[0]
+        for line in compose_template.read_text().splitlines()
+        if not line.lstrip().startswith("#")
+    ).split("\nx-notes:", 1)[0]
+    private_file(app_dir / "rooms.env", "existing permanent authentication")
+    if not (app_dir / "rooms-data").is_dir():
+        fail("existing rooms-data/ is missing; no data directory is created or moved")
+    if re.search(r"/neko\.env\b", active_yaml):
+        private_file(app_dir / "neko.env", "existing permanent authentication")
+    for name in ("profile", "downloads"):
+        if re.search(rf"/{name}(?:[\"']?\s*$)", active_yaml, re.MULTILINE) and not (app_dir / name).is_dir():
             fail(f"existing {name}/ is missing; no data directory is created or moved")
     for name in ("cdp.htpasswd", "config/chromium.conf", "config/chromium-policies.json"):
-        if not (app_dir / name).is_file():
+        if re.search(rf"/{re.escape(name)}(?:[\"']?\s*$)", active_yaml, re.MULTILINE) and not (app_dir / name).is_file():
             fail(f"existing legacy file is missing: {name}")
     check_network(network, turn_ip)
     cert = key = None

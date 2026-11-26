@@ -8,7 +8,7 @@ Nginx forwards public TCP22222 to the existing HAProxy classifier. It recognizes
 
 Existing room containers need not be recreated when changing entry transport. Relay room links follow current Manager endpoint policy instead of immutable creation-time URL labels. Their native viewer receives a small transport-only adapter before the upstream client starts: the matching old TURN URL is replaced in `RTCPeerConnection` construction/configuration, preserving credentials and every other ICE option. New rooms receive the selected URL directly in Neko configuration. Native signaling, video, controls and the headed browser are unchanged. The adapter also supports an explicitly selected TLS rollback.
 
-Default legacy services retain28320/28321 and UDP52100–52110. Those ports are not the unified entry. Existing external room ports/modes/data are not implicitly migrated. The authorized NAS is **192.168.202.11**; workstation `truenas.lan`/`truenas` resolves to a different host at192.168.201.11.
+Legacy default services (`neko` / `cdp-proxy`, ports 28320/28321 and UDP 52100–52110) have been removed so TCP 22222 is the sole published App port; archived host directories (`profile/`, `downloads/`, `config/`, `neko.env`, `cdp.htpasswd`) remain untouched on disk. Existing external room ports/modes/data are not implicitly migrated. The authorized NAS is **192.168.202.11**; workstation `truenas.lan`/`truenas` resolves to a different host at 192.168.201.11.
 
 ## Source ownership and configuration
 
@@ -51,7 +51,7 @@ The cached publisher is `python3 scripts/release.py publish`. It builds committe
 bash deploy/truenas/publish-to-tn.sh
 ```
 
-Changing only the Manager image **in configuration does not mean Manager-only runtime restart**. TN25.04 uses `compose up --force-recreate --remove-orphans`, recreating all App services, including the default browser and CDP proxy. External Manager-created room containers remain outside that project. Obtain approval for that interruption, preserve the current App/config/container/process/mount/auth state and whole opaque unmounted default NSS directory first. Never overwrite a live NSS database; restore only into the same stopped container and start that container, not an App-level start which may recreate it again. Mounted data/auth must not be reset.
+Changing only the Manager image **in configuration does not mean Manager-only runtime restart**. TN25.04 uses `compose up --force-recreate --remove-orphans`, recreating all App services (`gateway`, `classifier`, `turn`, `room-image`, `neko-rooms`). External Manager-created room containers remain outside that project. Obtain approval for that interruption and preserve the current App/config/container/process/mount/auth state first. (Unmounted default NSS preservation applies only if rolling back to a historical snapshot that still includes legacy `ix-neko-neko-1`.) Mounted data/auth must not be reset.
 
 An approved topology/transport change uses the same wrapper:
 
@@ -61,7 +61,7 @@ bash deploy/truenas/publish-to-tn.sh \
   --baseline /mnt/ylangsPool/appdata/neko/backups/YOUR_SNAPSHOT
 ```
 
-These are NAS paths. The updater preserves current default definitions/configs exactly, pins release images, pre-pulls, validates and issues **one** official `app.update`. It compares external IDs/start/init/Chromium PIDs/mounts, default image/ports/mounts and auth/config/data-root metadata. Errors stop without hidden rollback. `TN_SSH_CONTROL_PATH` reuses an existing persistent SSH transport. The networkless `room-image` service runs only `/bin/true` and exits0; it is an image-delivery prerequisite, not a crashed browser.
+These are NAS paths. The updater pins release images, pre-pulls, validates and issues **one** official `app.update` (and preserves existing legacy default definitions only when the approved manifest retains them). It compares external IDs/start/init/Chromium PIDs/mounts and auth/config/data-root metadata. Errors stop without hidden rollback. `TN_SSH_CONTROL_PATH` reuses an existing persistent SSH transport. The networkless `room-image` service runs only `/bin/true` and exits0; it is an image-delivery prerequisite, not a crashed browser.
 
 Manager restart invalidates RAM Owner sessions and Agent keys: sign in and issue keys again. HTTP and HTTPS Owner cookies use distinct names so an old Secure cookie cannot block explicit HTTP login. Native room passwords remain separate from Owner credentials and Agent Bearer keys. Do not call `Browser.close` on a shared room browser.
 

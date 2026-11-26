@@ -27,10 +27,12 @@ def prepare_config(original, image, standby_image=None, rendered=None):
             raise RuntimeError("Additional existing App services require restart-scope review")
         if not standby_image:
             raise ValueError("Topology migration requires the released browser image")
-        # Current protected service definitions, not template defaults, remain authoritative.
+        # Current protected service definitions, not template defaults, remain authoritative
+        # whenever the approved topology keeps those legacy services.
         for name in LEGACY:
-            config["services"][name] = copy.deepcopy(original["services"][name])
-        if original.get("configs"):
+            if name in config["services"] and name in original["services"]:
+                config["services"][name] = copy.deepcopy(original["services"][name])
+        if original.get("configs") and any(name in config["services"] for name in LEGACY):
             config.setdefault("configs", {}).update(copy.deepcopy(original["configs"]))
         config["services"]["room-image"]["image"] = standby_image
         config["services"]["neko-rooms"]["environment"]["NEKO_ROOMS_NEKO_IMAGES"] = standby_image
@@ -80,13 +82,13 @@ def container_snapshot():
     return rows
 
 
-def assert_preserved(before, after, allow_default_recreate=False):
+def assert_preserved(before, after, allow_default_recreate=False, allow_default_removal=False):
     actual = {row["name"]: row for row in after}
     checked = []
     for old in before:
         external = "neko" in old["name"].lower() and old.get("project") != "ix-neko"
         default = old["name"] == "/ix-neko-neko-1"
-        if not (external or default):
+        if not (external or (default and not allow_default_removal)):
             continue
         fields = ["image", "ports", "mounts"]
         if external or not allow_default_recreate:
@@ -98,22 +100,29 @@ def assert_preserved(before, after, allow_default_recreate=False):
             if old.get(field) != new.get(field):
                 raise RuntimeError("Protected container mismatch: " + old["name"] + " " + field)
         checked.append(old["name"])
-    if not checked:
+    if allow_default_removal:
+        for legacy_name in ("/ix-neko-neko-1", "/ix-neko-cdp-proxy-1"):
+            if legacy_name in actual:
+                raise RuntimeError("Removed legacy default container is still present: " + legacy_name)
+    if not checked and not allow_default_removal:
         raise RuntimeError("Protected container baseline is empty")
     return checked
 
 
 def protected_files():
-    paths = [APPDATA / name for name in ("rooms.env", "neko.env", "cdp.htpasswd",
-             "config/chromium.conf", "config/chromium-policies.json")]
+    required = [APPDATA / "rooms.env"]
+    optional = [APPDATA / name for name in ("neko.env", "cdp.htpasswd",
+                "config/chromium.conf", "config/chromium-policies.json")]
+    paths = required + [p for p in optional if p.is_file()]
     return {str(p): {"sha256": hashlib.sha256(p.read_bytes()).hexdigest(), "inode": p.stat().st_ino,
                     "mode": p.stat().st_mode & 0o777} for p in paths}
 
 
 def protected_directories():
+    names = ["rooms-data"] + [n for n in ("profile", "downloads") if (APPDATA / n).is_dir()]
     return {name: {"inode": (APPDATA / name).stat().st_ino, "uid": (APPDATA / name).stat().st_uid,
                    "gid": (APPDATA / name).stat().st_gid, "mode": (APPDATA / name).stat().st_mode & 0o777}
-            for name in ("rooms-data", "profile", "downloads")}
+            for name in names}
 
 
 def update(image, standby_image=None, compose=None, baseline=None):
@@ -161,18 +170,28 @@ def update(image, standby_image=None, compose=None, baseline=None):
                     "url": manager.get("environment", {}).get("NEKO_ROOMS_INSTANCE_URL"),
                     "network_mode": manager.get("environment", {}).get("NEKO_ROOMS_NETWORK_MODE", "direct")}
         before = files = None
+        had_default = "neko" in original["services"]
+        removing_default = had_default and "neko" not in config["services"]
         if compose:
-            if not baseline or not (baseline / "default-neko-nssdb").is_dir():
+            if not baseline:
+                raise ValueError("Topology migration requires a baseline snapshot")
+            if had_default and not (baseline / "default-neko-nssdb").is_dir():
                 raise ValueError("Topology migration requires a snapshot and whole-directory NSS backup")
             before = container_snapshot()
             # Default identity may differ after an authorized recovery; its
-            # image/ports/mounts remain protected, as do all external identities.
-            assert_preserved(json.loads((baseline / "containers-before.json").read_text()), before, True)
+            # image/ports/mounts remain protected while present, as do all external identities.
+            assert_preserved(json.loads((baseline / "containers-before.json").read_text()), before, True,
+                             allow_default_removal=not had_default)
             files = protected_files()
             saved_state = json.loads((baseline / "protected-files.json").read_text())
             saved = saved_state["files"]
+            if "rooms.env" not in saved:
+                raise RuntimeError("Protected auth file missing from baseline: rooms.env")
             for name in ("rooms.env", "neko.env", "cdp.htpasswd"):
-                if any(files[str(APPDATA / name)][key] != saved[name][key] for key in ("sha256", "inode", "mode")):
+                if name not in saved:
+                    continue
+                current = files.get(str(APPDATA / name))
+                if current is None or any(current[key] != saved[name][key] for key in ("sha256", "inode", "mode")):
                     raise RuntimeError("Protected auth file changed since baseline: " + name)
             directories = protected_directories()
             if directories != saved_state["directories"]:
@@ -196,11 +215,14 @@ def update(image, standby_image=None, compose=None, baseline=None):
         if compose:
             after = container_snapshot()
             (backup / "containers-after.json").write_text(json.dumps(after, indent=2))
-            checked = assert_preserved(before, after, allow_default_recreate=True)
+            checked = assert_preserved(before, after, allow_default_recreate=True,
+                                       allow_default_removal=removing_default or not had_default)
             if files != protected_files() or directories != protected_directories():
                 raise RuntimeError("Protected auth/config/data-root mismatch; stop before further action")
             (backup / "preservation-result.json").write_text(json.dumps({"checked": checked,
-                 "auth_config_unchanged": True, "default_recreation_authorized": True}, indent=2))
+                 "auth_config_unchanged": True,
+                 "default_recreation_authorized": had_default and not removing_default,
+                 "default_removed": removing_default}, indent=2))
         result = client.call("app.get_instance", APP)
     mirror = APPDATA / "compose.yaml"
     temporary = APPDATA / ".compose.yaml.manager-update"
