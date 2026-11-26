@@ -279,7 +279,7 @@ class ConfigurationTests(unittest.TestCase):
         self.assertEqual(stat.S_IMODE(self.state.stat().st_mode), 0o700)
         for item in self.state.rglob("*"):
             if item.is_file():
-                expected_mode = 0o644 if item.name == "haproxy.cfg" else 0o600
+                expected_mode = 0o644 if item.name == "haproxy.cfg" or item.relative_to(self.state).as_posix() == "public/tls-warning.js" else 0o600
                 self.assertEqual(stat.S_IMODE(item.stat().st_mode), expected_mode, item.name)
         for value in json.loads((self.state / "credentials.json").read_text()).values():
             self.assertNotIn(value, (self.state / "compose.env").read_text(), "credentials must not enter Compose interpolation")
@@ -302,8 +302,12 @@ class ConfigurationTests(unittest.TestCase):
         self.assertIn("proxy_set_header X-Forwarded-Proto https;", nginx)
         self.assertIn("proxy_set_header X-Forwarded-Port 8443;", nginx)
         self.assertIn("proxy_set_header Authorization $http_authorization;", nginx)
-        for route in ("/manage/", "/room/", "/rooms/"):
+        for route in ("/manage/", "/rooms/"):
             self.assertRegex(nginx, r"location " + route + r"\s+\{ proxy_pass \$manager\$request_uri; \}")
+        room = nginx.split("location /room/ {", 1)[1].split("}", 1)[0]
+        self.assertIn("proxy_pass $manager$request_uri;", room)
+        self.assertIn("/.neko/tls-warning.js", room)
+        self.assertNotIn("proxy_set_header", room)
         self.assertNotIn("aggregate.html", nginx)
         self.assertNotIn("@APP_HOST@", nginx)
 
@@ -458,10 +462,10 @@ class ConfigurationTests(unittest.TestCase):
     def test_lan_http_bootstrap_serves_only_public_ca_and_redirects_to_same_authority(self):
         self.configure()
         self.assertNotIn("location = /ca.crt", (self.state / "nginx.conf").read_text())
-        self.assertFalse(list((self.state / "public").iterdir()))
+        self.assertEqual([p.name for p in (self.state / "public").iterdir()], ["tls-warning.js"])
         self.configure_lan(renew_server_cert=True)
         public = self.state / "public"
-        self.assertEqual([path.name for path in public.iterdir()], ["ca.crt"])
+        self.assertEqual(sorted(path.name for path in public.iterdir()), ["ca.crt", "tls-warning.js"])
         self.assertEqual((public / "ca.crt").read_bytes(), (self.state / "tls/ca.crt").read_bytes())
         self.assertEqual(stat.S_IMODE(public.stat().st_mode), 0o755)
         self.assertEqual(stat.S_IMODE((public / "ca.crt").stat().st_mode), 0o644)

@@ -79,6 +79,26 @@ class ConfigurationTests(unittest.TestCase):
         # Compose config escapes every dollar for re-ingestion, even in JSON.
         return json.loads(result.stdout.replace("$$", "$"))
 
+    def test_tls_failure_help_is_public_and_does_not_drop_ws_headers(self):
+        self.values["HTTP_FALLBACK_URL"] = "http://neko.private.test:22222/manage/"
+        self.write_settings()
+        state = self.configure()
+        asset = state / "public/tls-warning.js"
+        self.assertEqual(asset.stat().st_mode & 0o777, 0o644)
+        self.assertIn("701 means unreachable", asset.read_text())
+        nginx = (state / "nginx.conf").read_text()
+        self.assertEqual(nginx.count("location = /ca.crt"), 2)
+        self.assertIn('data-ca-url="/ca.crt"', nginx)
+        self.assertIn('data-http-url="http://neko.private.test:22222/manage/"', nginx)
+        self.assertIn("/run/relay/public/tls-warning.js", nginx)
+        room = nginx.split("location /room/ {", 1)[1].split("}", 1)[0]
+        self.assertNotIn("proxy_set_header", room)
+
+    def test_http_help_link_rejects_non_http_credentials_and_config_quotes(self):
+        for value in ["https://host/", "javascript:alert(1)", "http://user:secret@host/", "http://host/?secret=x", "http://host/a'", 'http://host/a"', "http://host:70000/", "http://host/$http_authorization"]:
+            with self.subTest(value=value), self.assertRaises(ValueError):
+                cfg.topology(dict(self.values, HTTP_FALLBACK_URL=value), True, False)
+
     def test_plain_default_needs_no_tls_and_preserves_optional_archive(self):
         self.assertEqual(cfg.DEFAULTS["TRANSPORT"], "plain")
         tls_state = self.configure()

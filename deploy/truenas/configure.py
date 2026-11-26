@@ -14,6 +14,7 @@ import stat
 import subprocess
 import sys
 import tempfile
+from urllib.parse import urlsplit
 
 HERE = Path(__file__).resolve().parent
 ROOT = HERE.parent.parent
@@ -28,6 +29,7 @@ DEFAULTS = {
     "ROOM_NETWORK_CIDR": "", "TURN_PRIVATE_IP": "auto", "TLS_CERT_FILE": "", "TLS_KEY_FILE": "",
     "MANAGER_IMAGE": "docker.io/ylangylang/neko-rooms:single-port",
     "ROOM_IMAGE": "docker.io/ylangylang/neko-chromium-cdp:single-port", "RELEASE_PULL_POLICY": "always",
+    "HTTP_FALLBACK_URL": "",
 }
 COMPOSE_KEYS = ("NEKO_APP_DIR", "RELAY_STATE_DIR", "PUBLIC_PORT", "PUBLIC_BIND_IP", "PUBLIC_ORIGIN",
                 "TURN_PRIVATE_IP", "TLS_CERT_FILE", "TLS_KEY_FILE", "MANAGER_IMAGE", "ROOM_IMAGE", "RELEASE_PULL_POLICY")
@@ -106,6 +108,13 @@ def url_host(host):
 
 
 def topology(values, dev_ca, public):
+    fallback = values.setdefault("HTTP_FALLBACK_URL", "")
+    if fallback:
+        u = urlsplit(fallback)
+        if (u.scheme != "http" or not u.hostname or u.username or u.password or u.query or u.fragment
+                or re.search(r"[\s\"'<>\\$]", fallback) or (u.port is not None and not 1 <= u.port <= 65535)):
+            fail("HTTP_FALLBACK_URL must be a working HTTP entry URL without credentials, query or fragment")
+    values["TLS_WARNING_CA_URL"] = "/ca.crt" if dev_ca else ""
     if values["TRANSPORT"] not in ("plain", "tls"):
         fail("TRANSPORT must be plain or tls")
     if values["TRANSPORT"] == "plain" and dev_ca:
@@ -343,6 +352,8 @@ def configure(settings, app_dir=APP_DIR, dev_ca=False, public=False, renew=False
         fail("refusing a symlink public-certificate directory")
     public_dir.mkdir(mode=0o755, exist_ok=True)
     public_dir.chmod(0o755)
+    private_write(public_dir, "tls-warning.js", (HERE / "tls-warning.js").read_text())
+    (public_dir / "tls-warning.js").chmod(0o644)
     if dev_ca:
         private_write(public_dir, "ca.crt", (state / "tls/ca.crt").read_text())
         (public_dir / "ca.crt").chmod(0o644)

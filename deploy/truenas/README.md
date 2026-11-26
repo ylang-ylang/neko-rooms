@@ -86,3 +86,11 @@ node --test deploy/truenas/test_room_ice.cjs
 Endpoint checks do not establish media. Full acceptance needs real Chromium and Firefox: login, native1920×1080 continuous rendered frames, selected client `relay` with `relayProtocol=tcp` in plain mode, normal ICE `all`, and same-port stock Playwright CDP plus native input on an owned canary. Test with a real IP and `isSecureContext=false`, not a localhost exception or certificate bypass. Remove only owned canary resources.
 
 Before transport changes, privately save the current App definition, settings and matching owned relay files, including the ICE adapter, plus opaque NSS and preservation evidence. To roll back, restore the matching owned relay/settings set and call official `app.update` with that snapshot's `app-config.json`; update the host mirror only after success. Repeat preservation checks. Do not overwrite live Profile/download/auth data for configuration rollback. Historical snapshots deliberately retain their original HTTP28322, HTTPS28322 or HTTPS22222 endpoints. Current plain snapshots use HTTP22222; do not rewrite historical evidence to look current.
+
+## HTTPS TURN/TLS trust help
+
+Optional TLS viewers observe their **existing native peer connection**; no extra TURN allocation or ICE policy change is made. An explicit TURNS candidate error plus three seconds without a relay/working connection shows a dismissible warning with CA download and Chromium/Firefox import/restart steps. Relay allocation or a working connection suppresses it. HTTP viewers never install the watcher.
+
+Error701 means unreachable, not proof of an untrusted CA; the warning states this distinction and includes network/DNS causes. A page can be a secure context after bypassing its HTTPS warning while TURN/TLS still rejects the CA. An IP-address TURNS URL remains a separate Firefox limitation. Public CA downloads are available only in the explicit private-CA LAN configuration, over HTTP bootstrap and HTTPS.
+
+`HTTP_FALLBACK_URL` is optional: set it only to an actually working HTTP entry for the same deployment. Empty means no HTTP link; no listener/port is invented or enabled. The default TN HTTP22222 entry needs no certificate import and does not show this TLS warning.

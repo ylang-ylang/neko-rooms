@@ -12,6 +12,7 @@ import stat
 import subprocess
 import sys
 import tempfile
+from urllib.parse import urlsplit
 
 HERE = Path(__file__).resolve().parent
 ROOT = HERE.parent.parent
@@ -24,6 +25,7 @@ DEFAULTS = {
     "INSTANCE_NAME": "neko-single-port", "DOCKER_SOCKET": "/var/run/docker.sock",
     "TURN_RELAY_MIN": "49160", "TURN_RELAY_MAX": "49259", "TLS_CERT_FILE": "", "TLS_KEY_FILE": "",
     "OWNER_USERNAME": "", "OWNER_PASSWORD": "", "TURN_USERNAME": "", "TURN_PASSWORD": "",
+    "HTTP_FALLBACK_URL": "",
 }
 COMPOSE_KEYS = (
     "COMPOSE_PROJECT_NAME", "RELAY_STATE_DIR", "APP_HOST", "TURN_HOST", "PUBLIC_PORT", "PUBLIC_BIND_IP",
@@ -113,6 +115,13 @@ def port(values, key):
 
 
 def validate_topology(values, dev_ca, public, lan_ip=None, turn_host=None):
+    fallback = values.setdefault("HTTP_FALLBACK_URL", "")
+    if fallback:
+        u = urlsplit(fallback)
+        if (u.scheme != "http" or not u.hostname or u.username or u.password or u.query or u.fragment
+                or re.search(r"[\s\"'<>\\$]", fallback) or (u.port is not None and not 1 <= u.port <= 65535)):
+            fail("HTTP_FALLBACK_URL must be a working HTTP entry URL without credentials, query or fragment")
+    values["TLS_WARNING_CA_URL"] = "/ca.crt" if lan_ip is not None else ""
     if turn_host is not None and lan_ip is None:
         fail("--turn-host requires explicit --lan-ip --dev-ca --public")
     bind = ipaddress.IPv4Address(values["PUBLIC_BIND_IP"])
@@ -327,12 +336,14 @@ def configure(settings, state, dev_ca=False, public=False, lan_ip=None, renew_se
     if dev_ca:
         cert, key = development_cert(state, values, renew_server_cert)
         check_certificate(cert, key, values)
-    # This mount contains only a public certificate, never private TLS/auth files.
+    # This mount contains public certificates/help assets, never private TLS/auth files.
     public_directory = state / "public"
     if public_directory.is_symlink():
         fail("refusing a symlink public certificate directory")
     public_directory.mkdir(mode=0o755, exist_ok=True)
     public_directory.chmod(0o755)
+    private_write(public_directory, "tls-warning.js", (ROOT / "deploy/truenas/tls-warning.js").read_text())
+    (public_directory / "tls-warning.js").chmod(0o644)
     if lan_ip is not None:
         private_write(public_directory, "ca.crt", (state / "tls/ca.crt").read_text())
         (public_directory / "ca.crt").chmod(0o644)

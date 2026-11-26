@@ -23,3 +23,7 @@ MANAGER_IMAGE=docker.io/ylangylang/neko-rooms:single-port
 ROOM_IMAGE=docker.io/ylangylang/neko-chromium-cdp:single-port
 # Explicit offline archive load: set never ONLY after all referenced images exist.
 RELEASE_PULL_POLICY=always
+
+# Optional TLS warning link: set ONLY when this deployment has a real HTTP entry.
+# Never infer an HTTP listener from a TLS port; blank means no misleading link.
+HTTP_FALLBACK_URL=

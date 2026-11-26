@@ -271,3 +271,11 @@ This suite creates its **own** temporary bridge, CA, credentials and one random 
 `down` removes only this Compose project's services. Manager-created rooms are **not Compose services** and are not automatically deleted; storage, private state and the explicitly supplied external network are retained. Remove only your own now-unused bridge and browser CA trust when finished. Restarting Manager invalidates its existing in-memory Owner sessions and Agent keys.
 
 Mechanism references: [HAProxy 3.2 configuration manual](https://docs.haproxy.org/3.2/configuration.html) documents `tcp-request inspect-delay`, `req.proto_http`, `req.len`, `req.payload`, `WAIT_END` and Docker-style runtime `resolvers` / `init-addr none`; [Nginx SSL preread](https://nginx.org/en/docs/stream/ngx_stream_ssl_preread_module.html) reads `$ssl_preread_alpn_protocols`, `$ssl_preread_server_name` and `$ssl_preread_protocol` without terminating TLS; [stream proxy_pass](https://nginx.org/en/docs/stream/ngx_stream_proxy_module.html#proxy_pass) resolves variable upstreams through the configured resolver; [coturn 4.6.3 configuration](https://github.com/coturn/coturn/blob/4.6.3/examples/etc/turnserver.conf) documents peer allow/deny precedence.
+
+## HTTPS TURN/TLS trust help
+
+Optional TLS viewers observe their **existing native peer connection**; no extra TURN allocation or ICE policy change is made. An explicit TURNS candidate error plus three seconds without a relay/working connection shows a dismissible warning with CA download and Chromium/Firefox import/restart steps. Relay allocation or a working connection suppresses it. HTTP viewers never install the watcher.
+
+Error701 means unreachable, not proof of an untrusted CA; the warning states this distinction and includes network/DNS causes. A page can be a secure context after bypassing its HTTPS warning while TURN/TLS still rejects the CA. An IP-address TURNS URL remains a separate Firefox limitation. Public CA downloads are available only in the explicit private-CA LAN configuration, over HTTP bootstrap and HTTPS.
+
+`HTTP_FALLBACK_URL` is optional: set it only to an actually working HTTP entry for the same deployment. Empty means no HTTP link; no listener/port is invented or enabled. The default TN HTTP22222 entry needs no certificate import and does not show this TLS warning.
