@@ -5,6 +5,8 @@
   const options = document.currentScript ? document.currentScript.dataset : {};
   const caPath = options.caUrl === undefined ? '/ca.crt' : options.caUrl;
   const httpPath = options.httpUrl || '';
+  const surface = options.surface || 'room';
+  const dismissKey = 'neko-tls-ca-notice-dismissed:' + location.origin + ':' + caPath;
   const states = new Set();
   const watched = new WeakMap();
   let banner = null, dismissed = false;
@@ -25,7 +27,7 @@
   const hide = () => { if (banner) banner.remove(); banner = null; };
   const working = () => [...states].some(s => !s.closed && (s.relay || s.connected));
   const show = state => {
-    if (dismissed || banner || working()) return;
+    if (dismissed || banner || (surface !== 'manage' && working())) return;
     banner = element('aside');
     banner.setAttribute('data-neko-tls-warning', '');
     banner.setAttribute('role', 'alert');
@@ -34,8 +36,15 @@
     close.type = 'button';
     close.setAttribute('aria-label', 'Dismiss TURN/TLS warning');
     close.style.cssText = 'position:absolute;right:12px;top:8px;border:0;background:none;color:#241900;font-size:26px;cursor:pointer';
-    close.addEventListener('click', () => { dismissed = true; hide(); });
-    banner.append(close, element('strong', 'TURN/TLS connection failed — check certificate trust'));
+    close.addEventListener('click', () => {
+      dismissed = true;
+      if (surface === 'manage') { try { localStorage.setItem(dismissKey, '1'); } catch {} }
+      hide();
+    });
+    const title = surface === 'manage'
+      ? 'Private CA required for HTTPS room video (TURN/TLS)'
+      : 'TURN/TLS connection failed — check certificate trust';
+    banner.append(close, element('strong', title));
     banner.append(element('p', 'Continuing past an HTTPS warning does not install its CA. If you skipped that warning, your browser may still reject TURN/TLS. Import this deployment’s CA and fully restart the browser. DNS, network or server failures can also produce this error.'));
     if (state.firefoxIP) banner.append(element('p', 'Firefox also requires a DNS hostname for TURN/TLS. Importing a CA cannot fix an IP-address TURNS URL.'));
     const ca = link('Download private CA', caPath, 'https:');
@@ -51,6 +60,19 @@
     banner.append(instructions);
     (document.body || document.documentElement).append(banner);
   };
+  if (surface === 'manage') {
+    let alreadyDismissed = false;
+    try { alreadyDismissed = localStorage.getItem(dismissKey) === '1'; } catch {}
+    if (!alreadyDismissed && caPath) {
+      const mount = () => show({firefoxIP: /Firefox\//.test(navigator.userAgent) && /^(?:\[|\d+\.\d+\.\d+\.\d+$)/.test(location.hostname || '')});
+      if (document.readyState === 'loading' && document.addEventListener) {
+        document.addEventListener('DOMContentLoaded', mount, {once: true});
+      } else {
+        mount();
+      }
+    }
+    return;
+  }
   // Help controls must not forward keyboard input into the remote desktop.
   for (const type of ['keydown', 'keyup', 'keypress']) document.addEventListener(type, event => {
     if (event.target.closest && event.target.closest('[data-neko-tls-warning]')) event.stopImmediatePropagation();

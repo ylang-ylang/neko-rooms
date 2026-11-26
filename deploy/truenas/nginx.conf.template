@@ -104,9 +104,14 @@ http {
         location = / { return 302 /manage/; }
         location = /manage { return 308 /manage/; }
         # Manager owns the original viewer/signaling and separate Owner/Agent auth.
-        location /manage/ { proxy_pass $manager$request_uri; }
+        location /manage/ {
+            sub_filter_once on;
+            sub_filter '<head>' '<head><script src="/.neko/tls-warning.js" data-ca-url="@TLS_WARNING_CA_URL@" data-http-url="@HTTP_FALLBACK_URL@" data-surface="manage"></script>';
+            proxy_pass $manager$request_uri;
+        }
         location = /.neko/room-ice.js { alias /run/relay/room-ice.js; default_type application/javascript; add_header Cache-Control "no-store" always; }
         location /room/ {
+            add_header Cache-Control "no-store" always;
             sub_filter_once on;
             sub_filter '<head>' '<head><script src="/.neko/tls-warning.js" data-ca-url="@TLS_WARNING_CA_URL@" data-http-url="@HTTP_FALLBACK_URL@"></script><script src="/.neko/room-ice.js"></script>';
             proxy_pass $manager$request_uri;
