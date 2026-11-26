@@ -25,7 +25,7 @@ MARKER = "truenas-neko-native-relay-v1\n"
 PRIVATE_RANGES = tuple(ipaddress.ip_network(c) for c in ("10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16"))
 DEFAULTS = {
     "APP_HOST": "", "TURN_HOST": "", "PUBLIC_PORT": "28322", "PUBLIC_BIND_IP": "192.168.202.11",
-    "ROOM_NETWORK_CIDR": "", "TURN_PRIVATE_IP": "", "TLS_CERT_FILE": "", "TLS_KEY_FILE": "",
+    "ROOM_NETWORK_CIDR": "", "TURN_PRIVATE_IP": "auto", "TLS_CERT_FILE": "", "TLS_KEY_FILE": "",
     "MANAGER_IMAGE": "docker.io/ylangylang/neko-rooms:single-port",
     "ROOM_IMAGE": "docker.io/ylangylang/neko-chromium-cdp:single-port", "RELEASE_PULL_POLICY": "always",
 }
@@ -119,9 +119,11 @@ def topology(values, dev_ca, public):
     network = ipaddress.ip_network(values["ROOM_NETWORK_CIDR"], strict=True)
     if network.version != 4 or not any(network.subnet_of(p) for p in PRIVATE_RANGES):
         fail("ROOM_NETWORK_CIDR must be the existing RFC1918 IPv4 bridge subnet")
-    turn_ip = ipaddress.IPv4Address(values["TURN_PRIVATE_IP"])
-    if turn_ip not in network or turn_ip in (network.network_address, network.broadcast_address):
-        fail("TURN_PRIVATE_IP must be a usable address in ROOM_NETWORK_CIDR")
+    turn_ip = None if values["TURN_PRIVATE_IP"] in ("", "auto") else ipaddress.IPv4Address(values["TURN_PRIVATE_IP"])
+    if turn_ip is not None and (turn_ip not in network or turn_ip in (network.network_address, network.broadcast_address)):
+        fail("TURN_PRIVATE_IP must be auto or a usable address in ROOM_NETWORK_CIDR")
+    values["TURN_PRIVATE_IP"] = str(turn_ip) if turn_ip is not None else ""
+    values["TURN_BIND_IP"] = str(turn_ip) if turn_ip is not None else "0.0.0.0"
     for key in ("MANAGER_IMAGE", "ROOM_IMAGE"):
         if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_./:@-]*", values[key]):
             fail(f"{key} must be an explicit image channel/tag/digest")
@@ -151,6 +153,10 @@ def check_network(network, turn_ip):
     actual = json.loads(result.stdout)[0]
     if actual["Driver"] != "bridge" or str(network) not in [x.get("Subnet") for x in actual["IPAM"].get("Config", [])]:
         fail("ROOM_NETWORK_CIDR must match the existing neko-rooms-net bridge")
+    # An inspect-reported subnet may be Docker-allocated, not user-configured;
+    # such bridges reject static endpoint IPs. Auto mode needs no static claim.
+    if turn_ip is None:
+        return
     for config in actual["IPAM"].get("Config", []):
         if str(turn_ip) in [config.get("Gateway"), *config.get("AuxiliaryAddresses", {}).values()]:
             fail("TURN_PRIVATE_IP is a gateway or reserved address")

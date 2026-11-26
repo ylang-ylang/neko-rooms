@@ -1,8 +1,9 @@
 # Ordinary UDP allocations on the same PRIVATE bridge as native Neko rooms.
 # Only the gateway's private TCP upstream reaches this client listener.
 listening-port=3478
-listening-ip=@TURN_PRIVATE_IP@
-relay-ip=@TURN_PRIVATE_IP@
+# Auto mode binds the private container interface; coturn chooses its relay IP.
+# HAProxy resolves turn:3478 through Docker DNS, so a fixed endpoint is unnecessary.
+listening-ip=@TURN_BIND_IP@
 min-port=@TURN_RELAY_MIN@
 max-port=@TURN_RELAY_MAX@
 no-udp

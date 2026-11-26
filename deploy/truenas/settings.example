@@ -8,9 +8,10 @@ APP_HOST=
 TURN_HOST=
 PUBLIC_PORT=28322
 PUBLIC_BIND_IP=192.168.202.11
-# REQUIRED: inspect the EXISTING neko-rooms-net; choose a genuinely unused IP.
+# REQUIRED: inspect the subnet of the EXISTING neko-rooms-net; never recreate it.
 ROOM_NETWORK_CIDR=
-TURN_PRIVATE_IP=
+# Auto works on existing Docker-allocated subnets; no bridge recreation needed.
+TURN_PRIVATE_IP=auto
 # Existing fullchain/key covering APP_HOST and TURN_HOST. Keep the key private.
 # Leave BOTH blank ONLY when explicitly configuring --dev-ca (client trust needed).
 TLS_CERT_FILE=

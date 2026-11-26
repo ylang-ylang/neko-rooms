@@ -161,6 +161,19 @@ class ConfigurationTests(unittest.TestCase):
         cfg.check_certificate(state / "tls/server.crt", state / "tls/server.key",
                               dict(self.values, APP_HOST="2001:db8::11", TURN_HOST="2001:db8::11"))
 
+    def test_auto_turn_uses_docker_dns_without_static_endpoint_or_relay_ip(self):
+        self.values["TURN_PRIVATE_IP"] = "auto"
+        self.write_settings()
+        state = self.configure()
+        turn = self.model(state / "neko.compose.yaml")["services"]["turn"]
+        self.assertFalse(turn["networks"]["rooms"].get("ipv4_address"))
+        text = (state / "turnserver.conf").read_text()
+        self.assertIn("listening-ip=0.0.0.0", text)
+        self.assertNotIn("relay-ip=", text)
+        self.assertIn("turn:3478", (state / "haproxy.cfg").read_text())
+        for name, content in self.files.items():
+            self.assertEqual((self.app / name).read_text(), content)
+
     def test_idempotent_setup_keeps_permanent_ca_keys_and_turn(self):
         state = self.configure()
         names = ("tls/ca.crt", "tls/ca.key", "tls/server.crt", "tls/server.key", "turn-credentials.json")
@@ -233,7 +246,7 @@ class ConfigurationTests(unittest.TestCase):
         self.assertIn("location /room/", nginx)
         for text in ("req.proto_http", "2112a442", "reject if WAIT_END", "init-addr none"):
             self.assertIn(text, classifier)
-        for text in ("listening-ip=172.29.70.10", "relay-ip=172.29.70.10", "no-tcp-relay", "allowed-peer-ip=172.29.70.1-172.29.70.254"):
+        for text in ("listening-ip=172.29.70.10", "no-tcp-relay", "allowed-peer-ip=172.29.70.1-172.29.70.254"):
             self.assertIn(text, turn)
         self.assertNotRegex(nginx + classifier + turn, r"@[A-Z_]+@")
 

@@ -164,7 +164,9 @@ def update(image, standby_image=None, compose=None, baseline=None):
             if not baseline or not (baseline / "default-neko-nssdb").is_dir():
                 raise ValueError("Topology migration requires a snapshot and whole-directory NSS backup")
             before = container_snapshot()
-            assert_preserved(json.loads((baseline / "containers-before.json").read_text()), before)
+            # Default identity may differ after an authorized recovery; its
+            # image/ports/mounts remain protected, as do all external identities.
+            assert_preserved(json.loads((baseline / "containers-before.json").read_text()), before, True)
             files = protected_files()
             saved_state = json.loads((baseline / "protected-files.json").read_text())
             saved = saved_state["files"]
@@ -179,7 +181,14 @@ def update(image, standby_image=None, compose=None, baseline=None):
             for name, service in config["services"].items():
                 if name not in LEGACY:
                     deliver(name, service["image"])
-        (backup / "candidate-config.json").write_text(json.dumps(config, indent=2) + "\n")
+        candidate = backup / "candidate-config.json"
+        candidate.write_text(json.dumps(config, indent=2) + "\n")
+        if compose:
+            with (backup / "candidate-validation.log").open("w") as log:
+                validated = subprocess.run(["docker", "compose", "--project-name", "ix-neko", "--env-file", "/dev/null",
+                                            "-f", str(candidate), "config", "--quiet"], stdout=log, stderr=subprocess.STDOUT)
+            if validated.returncode:
+                raise RuntimeError("Final merged Compose invalid; inspect private backup " + str(backup))
         # Exactly one official update. Failure/mismatch never silently triggers a
         # second default-browser recreation; the operator owns recovery decisions.
         client.call("app.update", APP, {"custom_compose_config_string": json.dumps(config)}, job=True)
