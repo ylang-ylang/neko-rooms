@@ -171,11 +171,51 @@ The steps below show loopback URLs; in LAN mode, use the IP URLs above instead.
 1. Open **`https://neko.localhost:8443/manage/`**. Privately read `credentials.json` in an editor and sign into the **existing Owner form** using `owner_username` / `owner_password`. No global Basic-auth or substitute login UI is added.
 2. Create room **`native`**, API **3**, selecting the built CDP adapter image. Enter the saved `room_user_password` / `room_admin_password` as its native user/admin passwords; keep the normal separate Profile and Downloads private mounts. `room-request.json` has those settings for clients using the **existing authenticated Owner API** (`POST /manage/api/rooms`, then the usual room-start API). Creation/start are not done by configure or `up`.
 3. Use **`https://neko.localhost:8443/room/native/`** and log in with a display name plus a native room password. This path is proxied by Manager to the original Neko page, signaling and WebRTC. Owner cookies and Agent keys do not substitute for native viewer authentication. Native host control, keyboard/mouse, audio, clipboard and other room features remain Neko-owned.
-4. Check browser WebRTC diagnostics for a selected **relay** candidate and advancing decoded video/audio. A certificate handshake, successful login or loaded HTML alone is **not media proof**. Separately exercise the native controls/features you need.
+4. Check browser WebRTC diagnostics and advancing decoded video/audio. Native ICE uses its normal **all** policy, so a working viewer may legitimately select a direct path; playback alone does not prove TURN. For a TURN-specific test, use the isolated-room procedure below and require a selected client-side **relay** candidate with **`relayProtocol=tls`**. Separately exercise the native controls/features you need.
 
 Manager stays `NEKO_ROOMS_NETWORK_MODE=relay`, not `http`. Its existing private/full-ICE policy and Neko 3.2 native-YAML startup adapter suppress public-IP discovery; the room deployment adapter leaves this startup mechanism intact. Only newly created/recreated rooms receive those settings. Do not point this sample at existing rooms/credentials/data.
 
 Owner mutations must keep the exact HTTPS **Origin, including port**. Gateway forwarding preserves Host, HTTPS scheme, Authorization and WebSocket upgrades, so the existing Owner Secure-cookie and Agent Bearer boundaries remain in place. `/rooms/` never receives a gateway login challenge.
+
+### TURN-only debugging without affecting existing rooms
+
+Use a **new, owned test room**, never a room currently in use. Keep Manager, gateway and global firewall settings unchanged. Read that room's actual `NEKO_WEBRTC_UDPMUX` and `NEKO_WEBRTC_TCPMUX` privately, and inspect coturn's bridge IP. Confirm its network namespace differs from the host and every protected room. The following dedicated table restricts only the selected room's media sockets, including server-initiated peer-reflexive checks; it does not just bias the viewer's ICE policy.
+
+```sh
+ROOM_ID=YOUR_NEW_TEST_ROOM_ID
+PID=$(docker inspect --format '{{.State.Pid}}' "$ROOM_ID")
+UDP_PORT=ACTUAL_ROOM_UDP_MUX_PORT
+TCP_PORT=ACTUAL_ROOM_TCP_MUX_PORT
+TURN_IP=ACTUAL_COTURN_BRIDGE_IP
+# Verify the chosen room, ports, IP and distinct namespace before applying.
+sudo nsenter -t "$PID" -n nft -f - <<EOF
+table inet neko_turn_only {
+ chain ingress { type filter hook input priority -10; policy accept;
+  udp dport $UDP_PORT ip saddr $TURN_IP counter accept
+  udp dport $UDP_PORT counter drop
+  tcp dport $TCP_PORT counter drop
+ }
+ chain egress { type filter hook output priority -10; policy accept;
+  udp sport $UDP_PORT ip daddr $TURN_IP counter accept
+  udp sport $UDP_PORT counter drop
+  tcp sport $TCP_PORT counter drop
+ }
+}
+EOF
+sudo nsenter -t "$PID" -n nft list table inet neko_turn_only
+```
+
+Use the normal public HTTPS room URL and strict CA trust. Require actual rendered-frame growth and follow `transport.selectedCandidatePairId` to the **local** candidate: `candidateType=relay`, `relayProtocol=tls`. Its UDP protocol/remote host candidate describe the internal coturn-to-room hop, not browser direct media. A negative-control viewer with TURN removed must have no selected pair or streamed desktop. Never print credentials or full SDP.
+
+The local Chromium156 and Firefox ESR153 test rendered1080p through hostname TURNS; Chromium also passed numeric-IP TURNS. Firefox's numeric URL failed before STUN initialization with `TLS requires FQDN, not IP address`. This is a browser restriction, not a certificate-error workaround or a reason to prohibit IP configuration globally.
+
+Restore only that test room by deleting its dedicated table, then refresh/rejoin to allow direct candidates again:
+
+```sh
+sudo nsenter -t "$PID" -n nft delete table inet neko_turn_only
+```
+
+These rules belong to the current network namespace: stopping/restarting that test container removes them. Do not use a host-wide firewall rule, flush another table, or silently reapply rules after a room's identity/namespace changes. Keep or delete the test room/Profile only as the operator requests.
 
 ### Agent CDP uses the same native browser
 

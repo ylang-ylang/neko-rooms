@@ -10,7 +10,9 @@ Run from the **neko-rooms repository root**:
 bash deploy/truenas/publish-to-tn.sh
 ```
 
-This thin wrapper invokes the existing `python3 scripts/release.py publish` incremental/cached, component-aware publisher, transfers `release.json`, and uses the existing SSH key to invoke TN's `update.py --release ...`. TN upgrades only the current App's Manager image; the Browser image is pre-pulled for later use. Current networking, ports, environment, volumes and image allowlist remain unchanged. Persistent rooms are not stopped or recreated. There is no additional media, CDP, clone or authentication regression matrix. The original configuration is backed up privately; if official `app.update` fails, the same API restores it.
+This wrapper invokes the existing `python3 scripts/release.py publish` incremental/cached publisher, transfers `release.json`, and uses the existing SSH key to invoke TN's `update.py --release ...`. It changes only the Manager image **in the configuration** and pre-pulls the Browser image; this does **not** imply only the Manager container restarts. The installed TN 25.04 middleware runs `compose up --force-recreate --remove-orphans` for a RUNNING App update, recreating all App services, including the default `neko` browser and `cdp-proxy`, even when their definitions and images are unchanged. Manager-created dynamic rooms outside the `ix-neko` Compose project are not those App services.
+
+**Do not run the update when the default browser must remain uninterrupted.** Snapshot the current App definition/container state and obtain approval for App-service recreation first. The helper backs up configuration privately. Failures or preservation mismatches stop without automatically issuing a second update; recovery is an operator decision, and official-API restoration also recreates App services. Permanent env/auth files and bind-mounted data are not reset, but browser processes and their in-memory sessions are interrupted.
 
 **TN currently retains its original direct topology at `http://192.168.202.11:28322/manage/`, using Owner credentials from the existing `rooms.env`.** Initial single-port migration is separate from routine image updates. The authorized NAS is `.202.11`; `truenas.lan` resolves to a different host at `.201.11` and must not be used for this migration. The single-port instructions below accept a DNS name or literal IP, including `APP_HOST=192.168.202.11` with blank `TURN_HOST`. DNS is not a migration prerequisite. Chromium supports IP TURN/TLS with a trusted IP SAN; Firefox rejects numeric `turns:` URLs before TLS, but IP HTTPS and direct ICE remain usable.
 
@@ -66,7 +68,33 @@ Manual client trust, performed by the user only:
 
 The script generates **`/mnt/ylangsPool/appdata/neko/native-relay/neko.compose.yaml`**. Paste its complete contents into the existing TN **neko** App's YAML editor and save the update. **Do not paste repository source still containing `${...}`**: the TN editor does not read the checkout's `.env`. Generated YAML retains the flat layout and NAS absolute paths, without local cache dependencies. Original `rooms.env/neko.env` retain Compose dotenv semantics; TURN's `relay.env` uses Compose 2.30+ `format: raw`. Generation does not expand permanent passwords or start/stop services.
 
-The root YAML's networkless one-shot `room-image` service runs only `/bin/true`, pulling the **exact** image in Manager's allowlist. It runs no browser and mounts no data; Manager starts after it succeeds. The native stack needs no manual build/load or local retagging. Legacy default `neko/cdp-proxy` retains its existing image and `pull_policy: never`; upgrading does not recreate the default room.
+### Approved one-time topology migration through the same publisher
+
+Before any update, privately save `app.config`, actual installed YAML, original env/auth files, container IDs/start times/init and Chromium PIDs/mounts, and data-root inode/ownership. Copy the default browser's entire **unmounted** `/home/neko/.local/share/pki/nssdb` directory into that backup without inspecting its contents; writable-layer certificate trust otherwise disappears on recreation. Record a restore procedure for an approved stop/copy/start window, never overwrite a live NSS database.
+
+On TN, convert the generated YAML to JSON **without resolving env files** (TN already bundles `yaml`):
+
+```sh
+python3 - "$app/native-relay/neko.compose.yaml" "$app/native-relay/neko.compose.json" <<'PY'
+import json, os, pathlib, sys, yaml
+os.umask(0o077)
+pathlib.Path(sys.argv[2]).write_text(json.dumps(yaml.safe_load(pathlib.Path(sys.argv[1]).read_text())))
+PY
+```
+
+From the source checkout, after obtaining approval for default-service recreation, use the same cached one-command publisher:
+
+```sh
+bash deploy/truenas/publish-to-tn.sh \
+  --compose /mnt/ylangsPool/appdata/neko/native-relay/neko.compose.json \
+  --baseline /mnt/ylangsPool/appdata/neko/backups/YOUR_MIGRATION_SNAPSHOT
+```
+
+`--compose` and `--baseline` are NAS paths. The updater preserves the current default `neko/cdp-proxy` definitions and legacy configs exactly, pins the new Manager/room images from `release.json`, pre-pulls all new service images, then makes **one** official `app.update`. It checks external room IDs/start/init and Chromium PIDs/mounts, default image/ports/mounts, auth/config hashes and data-root metadata immediately afterward. Any mismatch stops; there is no silent rollback. `TN_SSH_CONTROL_PATH` may reuse an existing persistent SSH control socket without closing it. Do not run an ordinary old-topology Manager update first.
+
+Rollback, only after checking current impact/approval: load the original backup's `app-config.json` and call `Client().call('app.update', 'neko', {'custom_compose_config_string': json.dumps(saved)}, job=True)`. Restore the original host `compose.yaml` mirror after the API succeeds, and repeat preservation comparisons. Do not replace live profile/downloads/auth data with backup copies merely to roll back configuration. Default-service recreation happens again during rollback.
+
+The root YAML's networkless one-shot `room-image` service runs only `/bin/true`, pulling the **exact** image in Manager's allowlist. It runs no browser and mounts no data; Manager starts after it succeeds. The native stack needs no manual build/load or local retagging. Legacy default `neko/cdp-proxy` retains its existing image, data mounts and `pull_policy: never`; this prevents image replacement, **not** TrueNAS's forced container recreation. Check and approve that process interruption before applying the YAML.
 
 ## 2. Migrate old room networking explicitly
 
@@ -102,13 +130,13 @@ Issue temporary room-bound Agent Bearer keys from the Owner UI. Discovery/WSS us
 
 ## 3. Channels, version pinning and diagnostics
 
-Defaults are `MANAGER_IMAGE=docker.io/ylangylang/neko-rooms:single-port`, `ROOM_IMAGE=docker.io/ylangylang/neko-chromium-cdp:single-port`, and `RELEASE_PULL_POLICY=always`. The routine command above publishes and updates the authorized TN App through official `app.update`. CI alone publishes images; it does not log into the NAS or automatically recreate persistent rooms.
+Defaults are `MANAGER_IMAGE=docker.io/ylangylang/neko-rooms:single-port`, `ROOM_IMAGE=docker.io/ylangylang/neko-chromium-cdp:single-port`, and `RELEASE_PULL_POLICY=always`. The routine command above publishes and updates the authorized TN App through official `app.update`. CI publishes images without logging into the NAS. The explicit publisher/wrapper also publishes images, and only the wrapper's authorized official App update recreates App services.
 
 For pinning/rollback, replace both image settings with the release summary's immutable tags or `repo@sha256:...`, rerun the same configure command, and update the existing App YAML. Existing browser images change only through explicit per-room recreation. For offline archives, explicitly use `RELEASE_PULL_POLICY=never` only after every required image is loaded, referencing the real loaded versions rather than unpublished local tags.
 
 The previously deployed baseline was Manager `single-port-97ffae9` at `sha256:c8c2f4d8aba0228ce33a28d4d0a0d692439a9550bec6c8f17cb3bc1da73db592` and Browser `3.2.0-1` at `sha256:96e413b7a82a0ec6043597151ce5f2183d34188aa81cc692af3365eafa1bd4e2`. Both linux/amd64 artifacts were anonymously pulled by digest. New releases emit their own immutable references; unchanged Browser content reuses `single-port-1e57c836bd3d`. The baseline Manager is not a claim about the latest channel after subsequent releases.
 
-Image publishing and YAML generation alone do not establish NAS/WAN reachability. For initial single-port setup, check DNS, certificate trust and reachability from the actual client. An optional read-only endpoint diagnostic (add `--dev-ca` for private CA mode):
+Image publishing and YAML generation alone do not establish NAS/WAN reachability. For initial single-port setup, check the configured IP/name, certificate trust and reachability from the actual client. An optional read-only endpoint diagnostic (add `--dev-ca` for private CA mode):
 
 ```sh
 python3 deploy/truenas/configure.py --settings "$app/native-relay.settings" --check-endpoint
