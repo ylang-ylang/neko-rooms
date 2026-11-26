@@ -282,10 +282,12 @@ class ConfigurationTests(unittest.TestCase):
         classifier = (state / "haproxy.cfg").read_text()
         turn = (state / "turnserver.conf").read_text()
         self.assertIn("default 127.0.0.1:5349;", nginx)
+        self.assertIn('"" classifier:3480;', nginx)
+        self.assertIn("listen 8083;", nginx)
         self.assertIn("proxy_set_header X-Forwarded-Proto https;", nginx)
         self.assertIn("proxy_set_header X-Forwarded-Port 22222;", nginx)
         self.assertIn("location /room/", nginx)
-        for text in ("req.proto_http", "2112a442", "reject if WAIT_END", "init-addr none"):
+        for text in ("req.proto_http", "2112a442", "reject if WAIT_END", "init-addr none", "frontend plain_entry", "bind :3480", "gateway:8083"):
             self.assertIn(text, classifier)
         for text in ("listening-ip=172.29.70.10", "no-tcp-relay", "allowed-peer-ip=172.29.70.1-172.29.70.254"):
             self.assertIn(text, turn)

@@ -1,14 +1,19 @@
-// Transport-only compatibility for retained room containers. Their native UI,
-// signaling, credentials, media and input stay unchanged. New rooms already
-// receive the chosen URL from Neko's generated configuration.
+// Transport-only compatibility for retained room containers and Firefox numeric-IP
+// turns: limitations. Native UI, signaling, credentials, media and input stay unchanged.
 (() => {
-  const desired = @TURN_URL_JSON@;
+  const configured = @TURN_URL_JSON@;
   const previous = @PREVIOUS_TURN_URL_JSON@;
+  // Firefox nICEr rejects numeric-IP turns: URLs ("TLS requires FQDN, not IP address"),
+  // even with a trusted IP-SAN CA. Fall back ONLY Firefox-on-IP to plain TURN/TCP on
+  // the same single port (WebRTC media/input remain DTLS-SRTP encrypted end-to-end).
+  const ua = (typeof navigator !== 'undefined' && navigator.userAgent) || '';
+  const firefoxNumericTurns = /Firefox\//.test(ua) && /^turns:(?:\[|\d+\.\d+\.\d+\.\d+(?::|\?))/i.test(configured);
+  const desired = firefoxNumericTurns ? configured.replace(/^turns:/i, 'turn:') : configured;
   const rewrite = config => {
     if (!config || !config.iceServers) return config;
     return {...config, iceServers: config.iceServers.map(server => {
       const urls = server.urls;
-      const convert = url => url === previous ? desired : url;
+      const convert = url => (url === previous || url === configured) ? desired : url;
       return {...server, urls: Array.isArray(urls) ? urls.map(convert) : convert(urls)};
     })};
   };

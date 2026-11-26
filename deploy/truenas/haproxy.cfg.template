@@ -39,8 +39,26 @@ frontend shared_tcp
     use_backend http_backend if is_http
     use_backend turn_backend if stun_header stun_cookie
 
+# Non-TLS entry in TLS mode: plain HTTP goes ONLY to gateway:8083 (/ca.crt + 308 HTTPS
+# redirect, never Manager/rooms), while plain STUN/TURN (e.g. Firefox numeric-IP fallback)
+# goes directly to turn:3478. WebRTC media/input stay DTLS-SRTP encrypted end-to-end.
+frontend plain_entry
+    bind :3480
+    tcp-request inspect-delay 5s
+    acl is_http req.proto_http
+    acl stun_header req.len ge 20
+    acl stun_cookie req.payload(4,4) -m bin 2112a442
+    tcp-request content accept if is_http
+    tcp-request content accept if stun_header stun_cookie
+    tcp-request content reject if WAIT_END
+    use_backend http_redirect_backend if is_http
+    use_backend turn_backend if stun_header stun_cookie
+
 backend http_backend
     server gateway gateway:8082 resolvers docker resolve-prefer ipv4 init-addr none
+
+backend http_redirect_backend
+    server gateway gateway:8083 resolvers docker resolve-prefer ipv4 init-addr none
 
 backend turn_backend
     server turn turn:3478 resolvers docker resolve-prefer ipv4 init-addr none

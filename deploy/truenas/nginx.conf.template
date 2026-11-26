@@ -17,9 +17,11 @@ stream {
         "" $sni_backend;
         default 127.0.0.1:5349;
     }
-    # Plain HTTP uses this SAME public socket, only to bootstrap CA/HTTPS.
+    # Plain TCP on this SAME public socket goes to classifier:3480: plain HTTP
+    # reaches ONLY gateway:8083 (/ca.crt + 308 HTTPS redirect), while plain STUN/TURN
+    # (Firefox numeric-IP fallback) reaches turn:3478.
     map $ssl_preread_protocol $entry_backend {
-        "" 127.0.0.1:8081;
+        "" classifier:3480;
         default $tls_backend;
     }
     # A variable proxy_pass resolves Docker DNS again after container changes.
@@ -56,7 +58,8 @@ http {
     map $http_host $valid_host { default 0; "@PUBLIC_AUTHORITY@" 1; }
     map $http_host $valid_http_host { default 0; "@HTTP_AUTHORITY@" 1; }
     server {
-        listen 127.0.0.1:8081;
+        # Reachable only on the private bridge from classifier:3480, never host-published.
+        listen 8083;
         server_name @APP_HOST@;
         if ($valid_http_host = 0) { return 421; }
         # Exact certificate-only alias is generated ONLY in explicit LAN dev mode.
