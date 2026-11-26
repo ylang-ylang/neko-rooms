@@ -82,13 +82,12 @@
       const safeName = host.replace(/[^a-zA-Z0-9.-]/g, '-');
       const httpCaUrl = 'http://' + host + caPath;
       const cmds = {
-        linuxChrome: 'curl --noproxy "*" -fsS ' + httpCaUrl + ' -o /tmp/neko-ca.crt && sh -c \'mkdir -p "$HOME/.pki/nssdb" && ([ -f "$HOME/.pki/nssdb/cert9.db" ] || certutil -d "sql:$HOME/.pki/nssdb" -N --empty-password) && certutil -d "sql:$HOME/.pki/nssdb" -A -t "C,," -n "Neko CA ' + safeName + '" -i /tmp/neko-ca.crt\'',
-        linuxSystem: 'curl --noproxy "*" -fsS ' + httpCaUrl + ' -o /tmp/neko-ca.crt && sh -c \'if command -v update-ca-certificates >/dev/null 2>&1; then d=/usr/local/share/ca-certificates; [ -d /etc/pki/trust/anchors ] && d=/etc/pki/trust/anchors; sudo install -D -m 644 /tmp/neko-ca.crt "$d/neko-' + safeName + '.crt" && sudo update-ca-certificates; elif command -v trust >/dev/null 2>&1; then sudo trust anchor --store /tmp/neko-ca.crt; elif command -v update-ca-trust >/dev/null 2>&1; then d=/etc/ca-certificates/trust-source/anchors; [ -d /etc/pki/ca-trust/source/anchors ] && d=/etc/pki/ca-trust/source/anchors; sudo install -D -m 644 /tmp/neko-ca.crt "$d/neko-' + safeName + '.crt" && sudo update-ca-trust extract; else echo "Unsupported CA tool; import /tmp/neko-ca.crt manually" >&2; exit 1; fi && if command -v certutil >/dev/null 2>&1; then mkdir -p "$HOME/.pki/nssdb"; [ -f "$HOME/.pki/nssdb/cert9.db" ] || certutil -d "sql:$HOME/.pki/nssdb" -N --empty-password; for f in "$HOME/.pki/nssdb/cert9.db" "$HOME"/.mozilla/firefox/*/cert9.db "$HOME"/snap/firefox/common/.mozilla/firefox/*/cert9.db; do [ -f "$f" ] && certutil -d "sql:$(dirname "$f")" -A -t "C,," -n "Neko CA ' + safeName + '" -i /tmp/neko-ca.crt; done; true; fi\'',
+        linux: 'curl --noproxy "*" -fsS ' + httpCaUrl + ' -o /tmp/neko-ca.crt && sh -c \'ca=/tmp/neko-ca.crt; n="Neko CA ' + safeName + '"; ok=0; if command -v update-ca-certificates >/dev/null 2>&1; then d=/usr/local/share/ca-certificates; [ -d /etc/pki/trust/anchors ] && d=/etc/pki/trust/anchors; sudo install -D -m 644 "$ca" "$d/neko-' + safeName + '.crt" && sudo update-ca-certificates && ok=1; elif command -v trust >/dev/null 2>&1 || command -v update-ca-trust >/dev/null 2>&1; then (command -v trust >/dev/null 2>&1 && sudo trust anchor --store "$ca") || (d=/etc/ca-certificates/trust-source/anchors; [ -d /etc/pki/ca-trust/source/anchors ] && d=/etc/pki/ca-trust/source/anchors; sudo install -D -m 644 "$ca" "$d/neko-' + safeName + '.crt" && sudo update-ca-trust extract); [ $? -eq 0 ] && ok=1; fi; if command -v certutil >/dev/null 2>&1; then mkdir -p "$HOME/.pki/nssdb"; [ -f "$HOME/.pki/nssdb/cert9.db" ] || certutil -d "sql:$HOME/.pki/nssdb" -N --empty-password; for f in "$HOME/.pki/nssdb/cert9.db" "$HOME"/snap/chromium/current/.pki/nssdb/cert9.db "$HOME"/.var/app/*/config/pki/nssdb/cert9.db "$HOME"/.mozilla/firefox/*/cert9.db "$HOME"/snap/firefox/common/.mozilla/firefox/*/cert9.db "$HOME"/.var/app/org.mozilla.firefox/.mozilla/firefox/*/cert9.db; do [ -f "$f" ] && certutil -d "sql:$(dirname "$f")" -A -t "C,," -n "$n" -i "$ca" && ok=1; done; fi; [ "$ok" = 1 ] || { echo "No supported CA tool succeeded; import $ca in browser settings" >&2; exit 1; }; echo "CA installed; fully restart your browser."\'',
         macos: 'curl --noproxy "*" -fsS ' + httpCaUrl + ' -o /tmp/neko-ca.crt && sudo security add-trusted-cert -d -r trustRoot -k /Library/Keychains/System.keychain /tmp/neko-ca.crt',
         windows: 'curl.exe --noproxy "*" -fsS ' + httpCaUrl + ' -o "$env:TEMP\\neko-ca.crt"; certutil -addstore -f Root "$env:TEMP\\neko-ca.crt"',
       };
       const ua = navigator.userAgent || '';
-      let activeOs = /Windows/i.test(ua) ? 'windows' : (/Macintosh|Mac OS X/i.test(ua) ? 'macos' : 'linuxChrome');
+      let activeOs = /Windows/i.test(ua) ? 'windows' : (/Macintosh|Mac OS X/i.test(ua) ? 'macos' : 'linux');
       const cliBox = element('div');
       cliBox.style.cssText = 'margin:10px 0 8px;padding:10px 12px;border-radius:8px;background:#fff8dc;border:1px solid #d4a64a';
       const cliHead = element('div');
@@ -105,7 +104,7 @@
             (k === os ? 'background:#b56e00;color:#fff;font-weight:700' : 'background:#fff;color:#241900');
         }
       };
-      for (const [k, label] of [['linuxChrome', 'Linux (Chrome)'], ['linuxSystem', 'Linux (System + Firefox)'], ['macos', 'macOS'], ['windows', 'Windows']]) {
+      for (const [k, label] of [['linux', 'Linux'], ['macos', 'macOS'], ['windows', 'Windows']]) {
         const btn = element('button', label);
         btn.type = 'button';
         btn.addEventListener('click', () => renderOs(k));
