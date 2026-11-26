@@ -100,7 +100,13 @@ http {
         location = /manage { return 308 /manage/; }
         # Manager owns the original viewer/signaling and separate Owner/Agent auth.
         location /manage/ { proxy_pass $manager$request_uri; }
-        location /room/   { proxy_pass $manager$request_uri; }
+        location = /.neko/room-ice.js { alias /run/relay/room-ice.js; default_type application/javascript; add_header Cache-Control "no-store" always; }
+        location /room/ {
+            proxy_set_header Accept-Encoding "";
+            sub_filter_once on;
+            sub_filter '<head>' '<head><script src="/.neko/room-ice.js"></script>';
+            proxy_pass $manager$request_uri;
+        }
         location /rooms/  { proxy_pass $manager$request_uri; }
         location / { return 404; }
     }

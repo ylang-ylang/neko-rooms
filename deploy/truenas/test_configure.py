@@ -40,7 +40,7 @@ class ConfigurationTests(unittest.TestCase):
         self.app = self.base / "app # dollar$ and 'quote"
         self.app.mkdir()
         self.settings = self.base / "settings"
-        self.values = dict(cfg.DEFAULTS, APP_HOST="neko.private.test", TURN_HOST="neko.private.test",
+        self.values = dict(cfg.DEFAULTS, TRANSPORT="tls", APP_HOST="neko.private.test", TURN_HOST="neko.private.test",
                            PUBLIC_BIND_IP="127.0.0.1", ROOM_NETWORK_CIDR="172.29.70.0/24", TURN_PRIVATE_IP="172.29.70.10")
         for name in ("profile", "downloads", "rooms-data", "config"):
             (self.app / name).mkdir()
@@ -78,6 +78,28 @@ class ConfigurationTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         # Compose config escapes every dollar for re-ingestion, even in JSON.
         return json.loads(result.stdout.replace("$$", "$"))
+
+    def test_plain_default_needs_no_tls_and_preserves_optional_archive(self):
+        self.assertEqual(cfg.DEFAULTS["TRANSPORT"], "plain")
+        tls_state = self.configure()
+        retained = {str(p.relative_to(tls_state)): p.read_bytes() for p in (tls_state / "tls").iterdir()}
+        credentials = (tls_state / "turn-credentials.json").read_bytes()
+        self.values["TRANSPORT"] = "plain"
+        self.write_settings()
+        with patch.object(cfg, "development_cert", side_effect=AssertionError("plain must not generate TLS")), patch.object(cfg, "check_certificate", side_effect=AssertionError("plain must not require TLS")):
+            state, origin = cfg.configure(self.settings, self.app, compose_template=self.compose_template)
+        self.assertEqual(origin, "http://neko.private.test:22222")
+        model = self.model(state / "neko.compose.yaml")
+        gateway = model["services"]["gateway"]
+        self.assertFalse(any(v["target"].startswith("/run/relay/tls.") for v in gateway["volumes"]))
+        self.assertIn("/run/relay/room-ice.js", [v["target"] for v in gateway["volumes"]])
+        self.assertNotIn("ssl_certificate", (state / "nginx.conf").read_text())
+        self.assertIn("proxy_set_header X-Forwarded-Proto http", (state / "nginx.conf").read_text())
+        ice = json.loads(model["services"]["neko-rooms"]["environment"]["NEKO_ROOMS_RELAY_ICE_SERVERS_FRONTEND"])
+        self.assertEqual(ice[0]["urls"], ["turn:neko.private.test:22222?transport=tcp"])
+        self.assertEqual((state / "turn-credentials.json").read_bytes(), credentials)
+        for name, data in retained.items():
+            self.assertEqual((state / name).read_bytes(), data)
 
     def test_native_root_render_preserves_data_secrets_and_ports(self):
         state = self.configure()

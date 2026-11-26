@@ -25,6 +25,7 @@ import (
 )
 
 const adminSessionCookie = "neko_rooms_admin_session"
+const adminPlainSessionCookie = adminSessionCookie + "_http"
 const adminSessionLifetime = 7 * 24 * time.Hour
 
 // Only hashes of opaque, cryptographically random tokens are kept in memory.
@@ -73,8 +74,17 @@ func (a *adminAuth) validCredentials(username, password string) bool {
 	return subtle.ConstantTimeCompare(user[:], wantUser[:])&subtle.ConstantTimeCompare(pass[:], wantPass[:]) == 1
 }
 
+// Separate HTTP cookies avoid browsers rejecting an insecure overwrite of a
+// retained Secure cookie when operators explicitly switch transport.
+func (a *adminAuth) cookieName(r *http.Request) string {
+	if a.requestOrigin(r).Scheme == "http" {
+		return adminPlainSessionCookie
+	}
+	return adminSessionCookie
+}
+
 func (a *adminAuth) sessionValid(r *http.Request) bool {
-	cookie, err := r.Cookie(adminSessionCookie)
+	cookie, err := r.Cookie(a.cookieName(r))
 	if err != nil || len(cookie.Value) != base64.RawURLEncoding.EncodedLen(32) {
 		return false
 	}
@@ -94,7 +104,7 @@ func (a *adminAuth) revoke(r *http.Request) {
 	defer a.mu.Unlock()
 	// Revoke every matching cookie, including ambiguous duplicate paths.
 	for _, cookie := range r.Cookies() {
-		if cookie.Name == adminSessionCookie {
+		if cookie.Name == adminSessionCookie || cookie.Name == adminPlainSessionCookie {
 			delete(a.sessions, sha256.Sum256([]byte(cookie.Value)))
 		}
 	}
@@ -102,7 +112,7 @@ func (a *adminAuth) revoke(r *http.Request) {
 
 func (a *adminAuth) cookie(r *http.Request, token string, expires time.Time, maxAge int) *http.Cookie {
 	return &http.Cookie{
-		Name: adminSessionCookie, Value: token,
+		Name: a.cookieName(r), Value: token,
 		Path: path.Join("/", a.prefix), HttpOnly: true,
 		Secure: a.requestOrigin(r).Scheme == "https", SameSite: http.SameSiteLaxMode,
 		Expires: expires, MaxAge: maxAge,
@@ -412,10 +422,12 @@ func (a *adminAuth) proxyAuthenticate(r *http.Request) (*http.Response, error) {
 func (a *adminAuth) withoutOwnerCredentials(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		clean := r.Clone(r.Context())
-		if _, err := r.Cookie(adminSessionCookie); err == nil {
+		_, secureErr := r.Cookie(adminSessionCookie)
+		_, plainErr := r.Cookie(adminPlainSessionCookie)
+		if secureErr == nil || plainErr == nil {
 			clean.Header.Del("Cookie")
 			for _, cookie := range r.Cookies() {
-				if cookie.Name != adminSessionCookie {
+				if cookie.Name != adminSessionCookie && cookie.Name != adminPlainSessionCookie {
 					clean.AddCookie(cookie)
 				}
 			}

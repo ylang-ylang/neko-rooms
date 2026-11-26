@@ -1,4 +1,4 @@
-# Only the gateway's TLS terminator sends decrypted streams here. Classify the
+# Plain entry or the optional TLS terminator sends streams here. Classify the
 # first request, then relay the entire connection unchanged (HTTP keepalive,
 # WebSocket upgrades and subsequent TURN ChannelData are not re-classified).
 global
@@ -25,7 +25,7 @@ resolvers docker
     hold timeout 1s
     hold other 1s
 
-frontend decrypted_tls
+frontend shared_tcp
     bind :3479
     tcp-request inspect-delay 5s
     acl is_http req.proto_http
@@ -36,10 +36,10 @@ frontend decrypted_tls
     # Expiry, EOF or a full inspection buffer must never silently default to
     # TURN. Incomplete/unknown initial traffic is rejected explicitly.
     tcp-request content reject if WAIT_END
-    use_backend https_backend if is_http
+    use_backend http_backend if is_http
     use_backend turn_backend if stun_header stun_cookie
 
-backend https_backend
+backend http_backend
     server gateway gateway:8082 resolvers docker resolve-prefer ipv4 init-addr none
 
 backend turn_backend

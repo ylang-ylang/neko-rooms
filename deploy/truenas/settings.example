@@ -2,8 +2,9 @@
 # Literal KEY=value, NOT shell/dotenv; no inline comments/quote stripping.
 # No Owner/viewer password keys: existing rooms.env/neko.env remain authoritative.
 # REQUIRED: choose a reachable DNS name or IP (e.g. 192.168.202.11).
-# Blank TURN_HOST inherits APP_HOST. Chromium supports IP TURNS with an IP SAN;
-# Firefox rejects numeric TURNS URLs, but still supports IP HTTPS/direct ICE.
+# Default plain: HTTP/WS + TURN/TCP, no certificates/imports. TLS is opt-in.
+# Blank TURN_HOST inherits APP_HOST. For TLS, Firefox requires a DNS TURN host.
+TRANSPORT=plain
 APP_HOST=
 TURN_HOST=
 PUBLIC_PORT=22222
@@ -13,7 +14,7 @@ ROOM_NETWORK_CIDR=
 # Auto works on existing Docker-allocated subnets; no bridge recreation needed.
 TURN_PRIVATE_IP=auto
 # Existing fullchain/key covering APP_HOST and TURN_HOST. Keep the key private.
-# Leave BOTH blank ONLY when explicitly configuring --dev-ca (client trust needed).
+# Plain mode leaves both blank. TLS mode needs both or explicit --dev-ca.
 TLS_CERT_FILE=
 TLS_KEY_FILE=
 # Normal redeploy follows public channels; existing rooms are NOT auto-recreated.

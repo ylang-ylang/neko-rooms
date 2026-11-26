@@ -126,7 +126,7 @@ func (h *adminHarness) login(t *testing.T, next string) *http.Cookie {
 		t.Fatalf("native login failed: %d %s", res.StatusCode, body)
 	}
 	for _, cookie := range res.Cookies() {
-		if cookie.Name == adminSessionCookie {
+		if cookie.Name == adminSessionCookie || cookie.Name == adminPlainSessionCookie {
 			return cookie
 		}
 	}
@@ -632,5 +632,13 @@ func TestFormOriginDefaultPorts(t *testing.T) {
 		if got := a.sameOrigin(r, test.origin, false); got != test.valid {
 			t.Errorf("target %s origin %s: got %v", test.target, test.origin, got)
 		}
+	}
+}
+
+func TestOwnerSessionCookiesAreSeparatedAcrossTransport(t *testing.T) {
+	plain := newAdminHarness(t, "/manage", nil, false).login(t, "/manage/")
+	secure := newAdminHarness(t, "/manage", nil, true).login(t, "/manage/")
+	if plain.Name == secure.Name || plain.Secure || !secure.Secure || !plain.HttpOnly || !secure.HttpOnly {
+		t.Fatal("HTTP transport switch can collide with an existing Secure cookie")
 	}
 }

@@ -1,0 +1,21 @@
+// Transport-only compatibility for retained room containers. Their native UI,
+// signaling, credentials, media and input stay unchanged. New rooms already
+// receive the chosen URL from Neko's generated configuration.
+(() => {
+  const desired = @TURN_URL_JSON@;
+  const previous = @PREVIOUS_TURN_URL_JSON@;
+  const rewrite = config => {
+    if (!config || !config.iceServers) return config;
+    return {...config, iceServers: config.iceServers.map(server => {
+      const urls = server.urls;
+      const convert = url => url === previous ? desired : url;
+      return {...server, urls: Array.isArray(urls) ? urls.map(convert) : convert(urls)};
+    })};
+  };
+  const Native = window.RTCPeerConnection;
+  if (!Native) return;
+  window.RTCPeerConnection = class extends Native {
+    constructor(config, ...rest) { super(rewrite(config), ...rest); }
+    setConfiguration(config) { return super.setConfiguration(rewrite(config)); }
+  };
+})();

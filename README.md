@@ -94,27 +94,15 @@ This is shared-browser control, not a sandbox: use existing contexts/pages, do n
 
 New-room defaults use Neko API v3, 1920×1080 at 30 fps, 2 GiB shared memory and developer tools enabled. **Browser profiles are durable named resources**, independent of deployment names: select an available profile or create a new one in **Add room**, and manage them through **Profiles**. Quick room automatically creates a durable profile. Deployment removal retains the complete browser profile and Downloads by default; its confirmation offers unchecked, explicit permanent Profile deletion after deployment removal. Only an unbound Profile can be deleted. Clone forks an independent profile using its existing one-name form. Existing managed directories are adopted in place without restarting browsers. See [storage and profile recovery](./docs/storage.md).
 
-## One-entry HTTP/WebSocket desktop (NAS mode)
+## Native single-port TrueNAS deployment
 
-Set `NEKO_ROOMS_NETWORK_MODE=http` to serve the full Neko desktop and desktop audio through the Manager's **existing ordinary HTTP(S)/WebSocket entry**. The browser uses MSE/WebM, not WebRTC; only the Manager opens a private authenticated Pion peer to the unchanged Neko 3.2 room. No extra TURN service, second public media port, public UDP range, or room HostPort bindings are needed. Existing LAN HTTP works without a domain; an ordinary HTTPS reverse proxy can forward the same paths and WebSocket upgrades.
+The default TN entry is **http://192.168.202.11:22222/manage/**. Original Neko UI/WebRTC, HTTP/WS, Agent CDP and **plain TURN/TCP** share22222. No TLS/CA import is needed by default; TLS remains an explicit option. Keep `NEKO_ROOMS_NETWORK_MODE=relay`: this is **not** the historical aggregate/MSE `http` mode.
 
-```yaml
-NEKO_ROOMS_NETWORK_MODE: http
-NEKO_ROOMS_ADMIN_PATH_PREFIX: /manage
-NEKO_ROOMS_PATH_PREFIX: /room
-NEKO_ROOMS_INSTANCE_URL: /
-# Enable only behind the installation's trusted HTTP/WebSocket proxy.
-NEKO_ROOMS_PROXY: "true"
-# Leave NEKO_ROOMS_AGENT_PUBLIC_URL unset to infer the current request origin.
-```
+Profiles remain independent durable resources. Optional checkpoint replay failure warns and keeps a healthy room running; live cloning still requires complete buffered-state replay. Existing room containers retain their mounts/data when entry transport changes. A viewer-side ICE URL adapter handles their retained startup configuration without recreating their browsers. See [TN setup, transport and rollback](deploy/truenas/README.md) and [Profile ownership](docs/storage.md).
 
-The native TN entry is **https://192.168.202.11:22222/manage/**. Owner UI, original Neko WebRTC viewer (`/room/<name>/`), Agent CDP (`/rooms/<name>/`) and TURN/TLS share **22222/tcp**. Preserve those paths, WebSocket upgrades and Agent `Authorization` headers; an HTTP-only proxy is insufficient for TURN. This deployment does not use the historical aggregate/MSE viewer. Trust the private CA manually, and retain the existing Owner credentials and room data. See [TN deployment and recovery](deploy/truenas/README.md).
+Use existing Owner credentials for `/manage/`, native room passwords for `/room/NAME/`, and temporary Bearer keys for `/rooms/NAME/`; they are not interchangeable. Manager restart requires Owner login/key reissuance. TrueNAS App updates force-recreate default App services, not external room containers; follow the documented interruption/NSS-preservation workflow.
 
-Sign in to a room with its **existing native room username/password**, not owner credentials or an Agent key. Its one viewer WebSocket authenticates in the first message, never a token URL. Owner form login and temporary Agent CDP access remain separate. Changing the Manager policy affects only new/explicitly recreated rooms; existing rooms, Profile and Downloads are not automatically migrated. Direct/relay rooms retain their native Neko UI. TrueNAS configuration updates use the official Custom App `app.update` lifecycle described in the [operator workflow](./examples/relay/#3-controlled-activation-and-negative-checks); no extra relay services are needed for HTTP mode.
-
-**Current limits:** Neko API v3, native token sessions, **VP8 video + Opus audio** and browser WebM/MSE support are required. This receives full-desktop video/audio and forwards control through Neko's native ownership checks; microphone/webcam upload is unsupported. Codec changes fail visibly; resize or slow consumers close/reconnect with a fresh decoder rather than reuse stale media. The separate prototype measured **578–670 ms** optical latency at 1280×720/10fps; that is not a latency guarantee for this integrated release or higher-load NAS/WAN sessions. Product-path playback/input acceptance is a separate end-to-end check.
-
-For a fresh local setup with the **original Neko UI/WebRTC** and HTTPS + TURN/TLS on **one TCP port**, see the [single-port native relay example](./examples/single-port-relay/) (local development CA included).
+The historical `NEKO_ROOMS_NETWORK_MODE=http` aggregate/MSE implementation is not the TN deployment. The separate [local native TLS example](examples/single-port-relay/) is optional and independent.
 
 ## Optional two-listener TURN relay deployment
 

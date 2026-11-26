@@ -24,7 +24,7 @@ PROJECT = "ix-neko"
 MARKER = "truenas-neko-native-relay-v1\n"
 PRIVATE_RANGES = tuple(ipaddress.ip_network(c) for c in ("10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16"))
 DEFAULTS = {
-    "APP_HOST": "", "TURN_HOST": "", "PUBLIC_PORT": "22222", "PUBLIC_BIND_IP": "192.168.202.11",
+    "TRANSPORT": "plain", "APP_HOST": "", "TURN_HOST": "", "PUBLIC_PORT": "22222", "PUBLIC_BIND_IP": "192.168.202.11",
     "ROOM_NETWORK_CIDR": "", "TURN_PRIVATE_IP": "auto", "TLS_CERT_FILE": "", "TLS_KEY_FILE": "",
     "MANAGER_IMAGE": "docker.io/ylangylang/neko-rooms:single-port",
     "ROOM_IMAGE": "docker.io/ylangylang/neko-chromium-cdp:single-port", "RELEASE_PULL_POLICY": "always",
@@ -106,6 +106,10 @@ def url_host(host):
 
 
 def topology(values, dev_ca, public):
+    if values["TRANSPORT"] not in ("plain", "tls"):
+        fail("TRANSPORT must be plain or tls")
+    if values["TRANSPORT"] == "plain" and dev_ca:
+        fail("--dev-ca requires TRANSPORT=tls; plain mode never creates certificates")
     for key in ("APP_HOST", "TURN_HOST"):
         values[key] = hostname(values[key])
     bind = ipaddress.IPv4Address(values["PUBLIC_BIND_IP"])
@@ -131,8 +135,10 @@ def topology(values, dev_ca, public):
         fail("RELEASE_PULL_POLICY must be always, missing or never")
     if dev_ca and (values["TLS_CERT_FILE"] or values["TLS_KEY_FILE"]):
         fail("--dev-ca cannot replace supplied TLS paths")
-    authority = url_host(values["APP_HOST"]) + (":" + values["PUBLIC_PORT"] if values["PUBLIC_PORT"] != "443" else "")
-    values.update(PUBLIC_AUTHORITY=authority, PUBLIC_ORIGIN="https://" + authority,
+    scheme = "http" if values["TRANSPORT"] == "plain" else "https"
+    default_port = "80" if scheme == "http" else "443"
+    authority = url_host(values["APP_HOST"]) + (":" + values["PUBLIC_PORT"] if values["PUBLIC_PORT"] != default_port else "")
+    values.update(PUBLIC_AUTHORITY=authority, PUBLIC_ORIGIN=scheme + "://" + authority,
                   HTTP_AUTHORITY=url_host(values["APP_HOST"]) + (":" + values["PUBLIC_PORT"] if values["PUBLIC_PORT"] != "80" else ""),
                   ROOM_PEER_RANGE=f"{network.network_address + 1}-{network.broadcast_address - 1}",
                   TURN_RELAY_MIN="49160", TURN_RELAY_MAX="49259",
@@ -247,8 +253,16 @@ def render_source(source, values):
     # dollars. Leave original $$ Nginx variables untouched for Compose itself.
     # Do NOT serialize `compose config`: 2.32.3 expands secret env_file values
     # into that output and has no --no-env-resolution option.
-    lines = []
+    lines, skip_tls = [], False
     for line in source.splitlines():
+        if line.strip() == "# BEGIN TLS-only mounts":
+            skip_tls = values["TRANSPORT"] == "plain"
+            continue
+        if line.strip() == "# END TLS-only mounts":
+            skip_tls = False
+            continue
+        if skip_tls:
+            continue
         if "${" not in line:
             lines.append(line)
             continue
@@ -298,7 +312,8 @@ def configure(settings, app_dir=APP_DIR, dev_ca=False, public=False, renew=False
         if not (app_dir / name).is_file():
             fail(f"existing legacy file is missing: {name}")
     check_network(network, turn_ip)
-    if not dev_ca:
+    cert = key = None
+    if values["TRANSPORT"] == "tls" and not dev_ca:
         if not values["TLS_CERT_FILE"] or not values["TLS_KEY_FILE"]:
             fail("supply existing TLS_CERT_FILE/TLS_KEY_FILE, or explicitly select --dev-ca")
         cert = absolute_path(values["TLS_CERT_FILE"], "TLS_CERT_FILE")
@@ -331,14 +346,20 @@ def configure(settings, app_dir=APP_DIR, dev_ca=False, public=False, renew=False
     if dev_ca:
         private_write(public_dir, "ca.crt", (state / "tls/ca.crt").read_text())
         (public_dir / "ca.crt").chmod(0o644)
-    values.update(NEKO_APP_DIR=str(app_dir), RELAY_STATE_DIR=str(state), TLS_CERT_FILE=str(cert), TLS_KEY_FILE=str(key),
+    values.update(NEKO_APP_DIR=str(app_dir), RELAY_STATE_DIR=str(state), TLS_CERT_FILE=str(cert) if cert else "", TLS_KEY_FILE=str(key) if key else "",
                   TURN_USERNAME=saved["username"], TURN_PASSWORD=saved["password"])
-    ice = json.dumps([{"urls": [f"turns:{url_host(values['TURN_HOST'])}:{values['PUBLIC_PORT']}?transport=tcp"],
+    turn_scheme = "turn" if values["TRANSPORT"] == "plain" else "turns"
+    turn_authority = f"{url_host(values['TURN_HOST'])}:{values['PUBLIC_PORT']}?transport=tcp"
+    turn_url = turn_scheme + ":" + turn_authority
+    values.update(TURN_URL_JSON=json.dumps(turn_url), PREVIOUS_TURN_URL_JSON=json.dumps(("turns" if turn_scheme == "turn" else "turn") + ":" + turn_authority))
+    ice = json.dumps([{"urls": [turn_url],
                        "username": saved["username"], "credential": saved["password"]}], separators=(",", ":"))
     private_write(state, "relay.env", "NEKO_ROOMS_RELAY_ICE_SERVERS_FRONTEND=" + ice + "\n")
-    for name in ("nginx.conf", "turnserver.conf", "haproxy.cfg"):
-        text = (HERE / (name + ".template")).read_text()
+    for name in ("nginx.conf", "turnserver.conf", "haproxy.cfg", "room-ice.js"):
+        template = "nginx.plain.conf.template" if name == "nginx.conf" and values["TRANSPORT"] == "plain" else name + ".template"
+        text = (HERE / template).read_text()
         private_write(state, name, re.sub(r"@([A-Z_]+)@", lambda m: values[m[1]], text))
+    (state / "room-ice.js").chmod(0o644)  # Public transport URLs only, no credentials.
     (state / "haproxy.cfg").chmod(0o644)  # HAProxy is unprivileged; this file contains no secrets.
     render_compose(state, values, compose_template)
     return state, values["PUBLIC_ORIGIN"]
@@ -354,15 +375,17 @@ def check_endpoint(settings, app_dir=APP_DIR, private_ca=False):
         fail("PUBLIC_PORT must be from 1 to 65535")
     port = int(values["PUBLIC_PORT"])
     ca = absolute_path(str(app_dir), "app directory") / "native-relay/public/ca.crt" if private_ca else None
-    context = ssl.create_default_context(cafile=str(ca) if ca else None)
+    plain = values["TRANSPORT"] == "plain"
+    context = None if plain else ssl.create_default_context(cafile=str(ca) if ca else None)
     observations = []
     for host in hosts:
         addresses = sorted({entry[4][0] for entry in socket.getaddrinfo(host, port, type=socket.SOCK_STREAM)})
         with socket.create_connection((host, port), timeout=10) as connection:
-            with context.wrap_socket(connection, server_hostname=host):
-                pass  # Certificate SAN/trust/expiry checked; no TURN allocation is claimed.
-        observations.append(f"{host}:{port} DNS={','.join(addresses)} TCP/TLS verified")
-    web = http.client.HTTPSConnection(values["APP_HOST"], port, timeout=10, context=context)
+            if not plain:
+                with context.wrap_socket(connection, server_hostname=host):
+                    pass  # Certificate checked; no TURN allocation is claimed.
+        observations.append(f"{host}:{port} DNS={','.join(addresses)} TCP" + (" verified" if plain else "/TLS verified"))
+    web = http.client.HTTPConnection(values["APP_HOST"], port, timeout=10) if plain else http.client.HTTPSConnection(values["APP_HOST"], port, timeout=10, context=context)
     try:
         web.request("GET", "/manage/auth/login")
         response = web.getresponse()
