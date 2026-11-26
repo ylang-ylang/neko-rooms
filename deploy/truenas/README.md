@@ -14,7 +14,7 @@ This wrapper invokes the existing `python3 scripts/release.py publish` increment
 
 **Do not run the update when the default browser must remain uninterrupted.** Snapshot the current App definition/container state and obtain approval for App-service recreation first. The helper backs up configuration privately. Failures or preservation mismatches stop without automatically issuing a second update; recovery is an operator decision, and official-API restoration also recreates App services. Permanent env/auth files and bind-mounted data are not reset, but browser processes and their in-memory sessions are interrupted.
 
-**TN currently retains its original direct topology at `http://192.168.202.11:28322/manage/`, using Owner credentials from the existing `rooms.env`.** Initial single-port migration is separate from routine image updates. The authorized NAS is `.202.11`; `truenas.lan` resolves to a different host at `.201.11` and must not be used for this migration. The single-port instructions below accept a DNS name or literal IP, including `APP_HOST=192.168.202.11` with blank `TURN_HOST`. DNS is not a migration prerequisite. Chromium supports IP TURN/TLS with a trusted IP SAN; Firefox rejects numeric `turns:` URLs before TLS, but IP HTTPS and direct ICE remain usable.
+**TN's native single-port entry is `https://192.168.202.11:22222/manage/`, using the existing `rooms.env` Owner credentials.** HTTPS/WSS, TURN/TLS and Agent CDP share **22222/tcp**; the private CA must be trusted explicitly. Existing `work`, `8YsdUZRc` and its copy retain their actual direct mode, containers and old ports; the default `neko/cdp-proxy` retains **28320/28321** and **UDP52100–52110**. App updates recreate those default App services, not the external room browsers. Initial single-port migration is separate from routine image updates. The authorized NAS is `.202.11`; `truenas.lan` resolves to a different host at `.201.11` and must not be used for this migration. The single-port instructions below accept a DNS name or literal IP, including `APP_HOST=192.168.202.11` with blank `TURN_HOST`. DNS is not a migration prerequisite. Chromium supports IP TURN/TLS with a trusted IP SAN; Firefox rejects numeric `turns:` URLs before TLS, but IP HTTPS and direct ICE remain usable.
 
 To apply an already published Manager on TN itself:
 
@@ -22,13 +22,13 @@ To apply an already published Manager on TN itself:
 sudo -n python3 /home/truenas_admin/neko-native-release/update.py --manager-image docker.io/ylangylang/neko-rooms:single-port
 ```
 
-Durable browser profiles live under the existing Manager storage mount. Upgrades register legacy managed directories in place without restarting browsers. Deployment removal keeps the profile and Downloads by default; select that profile when creating a replacement. The removal confirmation offers an **unchecked** option to permanently delete only its Profile after the deployment is removed. The separate **Profiles** action also deletes available profiles only. See [storage ownership and recovery](../../docs/storage.md).
+Durable browser profiles live under the existing Manager storage mount. Manager registers legacy managed directories in place without restarting those dynamic room browsers; the TN-owned default browser is still subject to App-service recreation. Deployment removal keeps the profile and Downloads by default; select that profile when creating a replacement. The removal confirmation offers an **unchecked** option to permanently delete only its Profile after the deployment is removed. The separate **Profiles** action also deletes available profiles only. See [storage ownership and recovery](../../docs/storage.md).
 
 ## Initial native single-port deployment (DNS or IP)
 
 The sole manifest source remains the independent **truenas-apps repository's root [`neko.compose.yaml`](https://github.com/ylang-ylang/truenas-apps/blob/main/neko.compose.yaml)**. Do not create another App or move it into a `neko/` subdirectory. The implementation comes from `examples/single-port-relay/`; its three proxy templates are preserved. Native Neko 3.2 UI, core and Chromium are not replaced with aggregate/MSE pages.
 
-- **28322/tcp** upgrades the old Manager HTTP endpoint to same-port **HTTPS/WSS + TURN/TLS + Agent CDP**. Nginx retains the HTTP ALPN/SNI fast path; without SNI/ALPN, HAProxy distinguishes HTTP/STUN after TLS termination. Ordinary Playwright requires no special transport parameters.
+- **22222/tcp** replaces the old 28322 entry and carries **HTTPS/WSS + TURN/TLS + Agent CDP** on the same socket. Nginx retains the HTTP ALPN/SNI fast path; without SNI/ALPN, HAProxy distinguishes HTTP/STUN after TLS termination. Ordinary Playwright requires no special transport parameters.
 - Manager, HAProxy, coturn and new relay rooms publish no additional HostPorts. TURN UDP allocations remain inside the existing `neko-rooms-net`. An ordinary HTTP reverse proxy cannot replace this endpoint.
 - The old default room's `28320/28321`, `52100-52110/udp`, `profile/`, `downloads/`, `config/` and authentication files remain in place. These old ports are not the new public endpoint.
 - Legacy `rooms-data/rooms/NAME/{profile,downloads}` directories are registered as durable profile roots in place. New profiles use independent IDs, not deployment names. Old test data is not deleted automatically.
@@ -49,7 +49,7 @@ Fill in the private `native-relay.settings`:
 
 1. `APP_HOST`: a reachable DNS name or literal IP. For TN IP mode use `192.168.202.11`; blank `TURN_HOST` reuses it. Chromium IP TURN/TLS was verified with strict CA validation, video and selected `relayProtocol=tls`. Firefox numeric TURN/TLS is rejected with `TLS requires FQDN, not IP address`; this is not a server certificate error and does not prohibit IP HTTPS or direct ICE. A DNS TURN host remains an optional compatibility choice, not a deployment requirement. Do not modify client DNS/hosts automatically.
 2. `PUBLIC_BIND_IP`: defaults to the authorized NAS address `192.168.202.11`. Explicitly use `0.0.0.0` only when multiple listening interfaces are intended. DNS may point to another real NAS interface or an authorized TCP forwarder. **Its address need not literally match the bind IP, and this does not prove two addresses belong to one machine.** Workstation `truenas.lan`/`truenas` currently resolves to `192.168.201.11`; it is not the verified `.202.11` NAS.
-3. `PUBLIC_PORT=28322`: retains the existing external port. HTTPS and `turns:` must use this same port. Any later WAN exposure requires authorized raw TCP/L4 forwarding, not an HTTPS-only proxy/CDN.
+3. `PUBLIC_PORT=22222`: the current authorized single public entry; 28322 is no longer published after this port change. HTTPS and `turns:` must use this same port. Any later WAN exposure requires authorized raw TCP/L4 forwarding, not an HTTPS-only proxy/CDN.
 4. `ROOM_NETWORK_CIDR`: the inspected bridge subnet. Keep **`TURN_PRIVATE_IP=auto`** on existing bridges: Docker assigns coturn's private address, HAProxy resolves `turn:3478`, and coturn selects its relay interface. An inspect-reported subnet may be Docker-allocated; it does **not** establish that static endpoint IPs are supported. An explicit unused IP is only for a bridge known to have been created with a user-configured subnet. Never recreate the network carrying existing rooms to enable static addressing.
 5. Existing trusted certificate: set the actual NAS `TLS_CERT_FILE` fullchain and `TLS_KEY_FILE`. The certificate must cover both configured hosts, using IP SANs for literals and DNS SANs for names; keep the key mode 0600. The script does not overwrite them.
 
@@ -62,9 +62,9 @@ python3 deploy/truenas/configure.py --compose-template "$manifest" --settings "$
 **LAN-only private CA mode:** leave both TLS fields blank and explicitly add `--dev-ca`. IP mode generates an IP SAN and does not require a DNS name. The script creates/reuses `native-relay/tls/`, without importing trust, changing DNS or replacing an existing CA/key. Clients must explicitly trust `native-relay/public/ca.crt`; it is the only public certificate downloadable at same-port `/ca.crt` and contains no private key. Leaf certificates last 30 days. To renew or change configured hosts, explicitly add `--renew-server-cert` to the same command; only the leaf certificate changes, retaining CA, keys and TURN credentials.
 
 Manual client trust, performed by the user only:
-1. Download the public certificate from `http://192.168.202.11:28322/ca.crt` after deployment.
+1. Download the public certificate from `http://192.168.202.11:22222/ca.crt` after deployment.
 2. Import it as a trusted website CA in the intended browser: Firefox **Certificates → Authorities → Import**, or Chromium's certificate manager. Never import the CA key or use a certificate-error bypass.
-3. Open `https://192.168.202.11:28322/manage/`. For Node/CDP clients, set `NODE_EXTRA_CA_CERTS` to that downloaded certificate before starting the client. The configurator does not import anything on user machines.
+3. Open `https://192.168.202.11:22222/manage/`. For Node/CDP clients, set `NODE_EXTRA_CA_CERTS` to that downloaded certificate before starting the client. The configurator does not import anything on user machines.
 
 The script generates **`/mnt/ylangsPool/appdata/neko/native-relay/neko.compose.yaml`**. Paste its complete contents into the existing TN **neko** App's YAML editor and save the update. **Do not paste repository source still containing `${...}`**: the TN editor does not read the checkout's `.env`. Generated YAML retains the flat layout and NAS absolute paths, without local cache dependencies. Original `rooms.env/neko.env` retain Compose dotenv semantics; TURN's `relay.env` uses Compose 2.30+ `format: raw`. Generation does not expand permanent passwords or start/stop services.
 
@@ -92,6 +92,8 @@ bash deploy/truenas/publish-to-tn.sh \
 
 `--compose` and `--baseline` are NAS paths. The updater preserves the current default `neko/cdp-proxy` definitions and legacy configs exactly, pins the new Manager/room images from `release.json`, pre-pulls all new service images, then makes **one** official `app.update`. It checks external room IDs/start/init and Chromium PIDs/mounts, default image/ports/mounts, auth/config hashes and data-root metadata immediately afterward. Any mismatch stops; there is no silent rollback. `TN_SSH_CONTROL_PATH` may reuse an existing persistent SSH control socket without closing it. Do not run an ordinary old-topology Manager update first.
 
+Before changing a native endpoint, also copy its owned `native-relay.settings`, `nginx.conf`, `haproxy.cfg`, `turnserver.conf` and `relay.env` into the private snapshot; App YAML references these files rather than embedding their contents. A port rollback must restore that matching owned configuration set before applying its saved App definition. Leave CA/keys, permanent auth and browser data untouched.
+
 Rollback, only after checking current impact/approval: load the original backup's `app-config.json` and call `Client().call('app.update', 'neko', {'custom_compose_config_string': json.dumps(saved)}, job=True)`. Restore the original host `compose.yaml` mirror after the API succeeds, and repeat preservation comparisons. Do not replace live profile/downloads/auth data with backup copies merely to roll back configuration. Default-service recreation happens again during rollback.
 
 The root YAML's networkless one-shot `room-image` service runs only `/bin/true`, pulling the **exact** image in Manager's allowlist. It runs no browser and mounts no data; Manager starts after it succeeds. The native stack needs no manual build/load or local retagging. Legacy default `neko/cdp-proxy` retains its existing image, data mounts and `pull_policy: never`; this prevents image replacement, **not** TrueNAS's forced container recreation. Check and approve that process interruption before applying the YAML.
@@ -100,7 +102,7 @@ The root YAML's networkless one-shot `room-image` service runs only `/bin/true`,
 
 Updating Manager/YAML does not change old `http/direct` containers, network labels or ports. An `http` room still uses its old custom aggregator; default Recreate may reject an old image absent from the new allowlist.
 
-Sign in at the new `https://APP_HOST:28322/manage/` with the **original `rooms.env` Owner credentials**. Manager restart invalidates old sessions and temporary Agent keys; sign in/issue keys again. **Do not bulk-delete rooms or modify the default TN-owned neko service.**
+Sign in at the new `https://APP_HOST:22222/manage/` with the **original `rooms.env` Owner credentials**. Manager restart invalidates old sessions and temporary Agent keys; sign in/issue keys again. **Do not bulk-delete rooms or modify the default TN-owned neko service.**
 
 Migrate one explicitly selected room at a time:
 
@@ -151,3 +153,7 @@ PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s deploy/truenas -p 'tes
 # If the manifest checkout is not adjacent: TEST_COMPOSE_TEMPLATE=/path/to/truenas-apps/neko.compose.yaml.
 # Optional matching NAS Compose binary: prefix with TEST_COMPOSE_BINARY=/path/to/docker-compose-v2.32.3.
 ```
+
+## Recovery endpoint selection
+
+The active native endpoint is **https://192.168.202.11:22222/manage/**; CA bootstrap uses **http://192.168.202.11:22222/ca.crt**. Original migration snapshots intentionally retain their historical ports: restoring the original direct topology returns Manager HTTP 28322 and default 28320/28321; a pre-port-change native snapshot returns HTTPS 28322. These are recovery targets, not a second active entry. Never rewrite saved original YAML or failure evidence to make historical ports look current. Save the final 22222 configuration before future upgrades.

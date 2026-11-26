@@ -24,7 +24,7 @@ PROJECT = "ix-neko"
 MARKER = "truenas-neko-native-relay-v1\n"
 PRIVATE_RANGES = tuple(ipaddress.ip_network(c) for c in ("10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16"))
 DEFAULTS = {
-    "APP_HOST": "", "TURN_HOST": "", "PUBLIC_PORT": "28322", "PUBLIC_BIND_IP": "192.168.202.11",
+    "APP_HOST": "", "TURN_HOST": "", "PUBLIC_PORT": "22222", "PUBLIC_BIND_IP": "192.168.202.11",
     "ROOM_NETWORK_CIDR": "", "TURN_PRIVATE_IP": "auto", "TLS_CERT_FILE": "", "TLS_KEY_FILE": "",
     "MANAGER_IMAGE": "docker.io/ylangylang/neko-rooms:single-port",
     "ROOM_IMAGE": "docker.io/ylangylang/neko-chromium-cdp:single-port", "RELEASE_PULL_POLICY": "always",

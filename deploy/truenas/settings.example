@@ -6,7 +6,7 @@
 # Firefox rejects numeric TURNS URLs, but still supports IP HTTPS/direct ICE.
 APP_HOST=
 TURN_HOST=
-PUBLIC_PORT=28322
+PUBLIC_PORT=22222
 PUBLIC_BIND_IP=192.168.202.11
 # REQUIRED: inspect the subnet of the EXISTING neko-rooms-net; never recreate it.
 ROOM_NETWORK_CIDR=

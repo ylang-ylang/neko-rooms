@@ -22,7 +22,8 @@ LEGACY = {"neko", "cdp-proxy"}
 def prepare_config(original, image, standby_image=None, rendered=None):
     config = copy.deepcopy(original if rendered is None else rendered)
     if rendered is not None:
-        if set(original["services"]) - LEGACY - {"neko-rooms"}:
+        known = LEGACY | {"neko-rooms", "gateway", "classifier", "turn", "room-image"}
+        if set(original["services"]) - known:
             raise RuntimeError("Additional existing App services require restart-scope review")
         if not standby_image:
             raise ValueError("Topology migration requires the released browser image")

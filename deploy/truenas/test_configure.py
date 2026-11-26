@@ -102,7 +102,7 @@ class ConfigurationTests(unittest.TestCase):
         for name in ("neko-rooms", "turn", "classifier", "room-image"):
             self.assertFalse(services[name].get("ports"), name)
         published = {(p["published"], p["protocol"]) for s in services.values() for p in s.get("ports", [])}
-        expected = {("28320", "tcp"), ("28321", "tcp"), ("28322", "tcp")}
+        expected = {("28320", "tcp"), ("28321", "tcp"), ("22222", "tcp")}
         expected.update((str(p), "udp") for p in range(52100, 52111))
         self.assertEqual(published, expected)
         self.assertEqual(services["gateway"]["ports"][0]["host_ip"], "127.0.0.1")
@@ -117,7 +117,7 @@ class ConfigurationTests(unittest.TestCase):
         self.assertEqual(mounts["/home/neko/Downloads"], str(self.app / "downloads"))
         ice = json.loads(manager["environment"]["NEKO_ROOMS_RELAY_ICE_SERVERS_FRONTEND"])
         saved = json.loads((state / "turn-credentials.json").read_text())
-        self.assertEqual(ice[0]["urls"], ["turns:neko.private.test:28322?transport=tcp"])
+        self.assertEqual(ice[0]["urls"], ["turns:neko.private.test:22222?transport=tcp"])
         self.assertEqual(ice[0]["credential"], saved["password"])
         self.assertNotIn(saved["password"], yaml)
         self.assertEqual(services["turn"]["networks"]["rooms"]["ipv4_address"], "172.29.70.10")
@@ -127,9 +127,9 @@ class ConfigurationTests(unittest.TestCase):
         self.write_settings()
         state = self.configure()
         services = self.model(state / "neko.compose.yaml")["services"]
-        self.assertEqual(services["neko-rooms"]["environment"]["NEKO_ROOMS_INSTANCE_URL"], "https://192.168.202.11:28322/")
+        self.assertEqual(services["neko-rooms"]["environment"]["NEKO_ROOMS_INSTANCE_URL"], "https://192.168.202.11:22222/")
         ice = json.loads((state / "relay.env").read_text().split("=", 1)[1])
-        self.assertEqual(ice[0]["urls"], ["turns:192.168.202.11:28322?transport=tcp"])
+        self.assertEqual(ice[0]["urls"], ["turns:192.168.202.11:22222?transport=tcp"])
         result = RUN(["openssl", "x509", "-in", str(state / "tls/server.crt"), "-noout", "-ext", "subjectAltName"],
                      capture_output=True, text=True, check=True)
         self.assertIn("IP Address:192.168.202.11", result.stdout)
@@ -155,9 +155,9 @@ class ConfigurationTests(unittest.TestCase):
         self.write_settings()
         state = self.configure()
         services = self.model(state / "neko.compose.yaml")["services"]
-        self.assertEqual(services["neko-rooms"]["environment"]["NEKO_ROOMS_INSTANCE_URL"], "https://[2001:db8::11]:28322/")
+        self.assertEqual(services["neko-rooms"]["environment"]["NEKO_ROOMS_INSTANCE_URL"], "https://[2001:db8::11]:22222/")
         ice = json.loads((state / "relay.env").read_text().split("=", 1)[1])
-        self.assertEqual(ice[0]["urls"], ["turns:[2001:db8::11]:28322?transport=tcp"])
+        self.assertEqual(ice[0]["urls"], ["turns:[2001:db8::11]:22222?transport=tcp"])
         cfg.check_certificate(state / "tls/server.crt", state / "tls/server.key",
                               dict(self.values, APP_HOST="2001:db8::11", TURN_HOST="2001:db8::11"))
 
@@ -226,13 +226,13 @@ class ConfigurationTests(unittest.TestCase):
             state = self.configure()
         services = self.model(state / "neko.compose.yaml")["services"]
         self.assertEqual(services["room-image"]["image"], cfg.DEFAULTS["ROOM_IMAGE"])
-        self.assertEqual(services["gateway"]["ports"][0]["published"], "28322")
+        self.assertEqual(services["gateway"]["ports"][0]["published"], "22222")
 
     def test_blank_turn_host_uses_same_explicit_dns_name(self):
         self.values["TURN_HOST"] = ""
         self.write_settings()
         state = self.configure()
-        self.assertIn("turns:neko.private.test:28322", (state / "relay.env").read_text())
+        self.assertIn("turns:neko.private.test:22222", (state / "relay.env").read_text())
         self.assertNotIn("neko.private.test 127.0.0.1:8443;", (state / "nginx.conf").read_text())
 
     def test_native_transport_templates_and_single_port_headers(self):
@@ -242,7 +242,7 @@ class ConfigurationTests(unittest.TestCase):
         turn = (state / "turnserver.conf").read_text()
         self.assertIn("default 127.0.0.1:5349;", nginx)
         self.assertIn("proxy_set_header X-Forwarded-Proto https;", nginx)
-        self.assertIn("proxy_set_header X-Forwarded-Port 28322;", nginx)
+        self.assertIn("proxy_set_header X-Forwarded-Port 22222;", nginx)
         self.assertIn("location /room/", nginx)
         for text in ("req.proto_http", "2112a442", "reject if WAIT_END", "init-addr none"):
             self.assertIn(text, classifier)
@@ -337,7 +337,7 @@ class ConfigurationTests(unittest.TestCase):
 
     def test_topology_requires_valid_hosts_private_subnet_and_opt_in_bind(self):
         cases = (({"APP_HOST": "https://192.168.202.11"}, "DNS names or IP"),
-                 ({"TURN_HOST": "192.168.202.11:28322"}, "DNS names or IP"),
+                 ({"TURN_HOST": "192.168.202.11:22222"}, "DNS names or IP"),
                  ({"PUBLIC_BIND_IP": "0.0.0.0"}, "--public"),
                  ({"ROOM_NETWORK_CIDR": "203.0.113.0/24"}, "RFC1918"),
                  ({"TURN_PRIVATE_IP": "172.29.70.255"}, "usable address"),

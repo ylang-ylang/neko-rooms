@@ -48,6 +48,18 @@ class UpdateTests(unittest.TestCase):
         self.assertEqual(result["services"]["gateway"]["pull_policy"], "never")
         self.assertEqual(rendered["services"]["room-image"]["image"], "channel")
 
+    def test_existing_native_topology_can_change_public_port(self):
+        native = update.prepare_config(self.original(), "manager", "browser", self.rendered())
+        native["services"]["gateway"]["ports"] = ["192.168.202.11:28322:443"]
+        rendered = copy.deepcopy(native)
+        rendered["services"]["gateway"]["ports"] = ["192.168.202.11:22222:443"]
+        rendered["services"]["neko-rooms"]["environment"]["NEKO_ROOMS_INSTANCE_URL"] = "https://192.168.202.11:22222/"
+        result = update.prepare_config(native, "manager", "browser", rendered)
+        self.assertEqual(result["services"]["gateway"]["ports"], ["192.168.202.11:22222:443"])
+        for name in update.LEGACY:
+            self.assertEqual(result["services"][name], native["services"][name])
+        self.assertEqual(native["services"]["gateway"]["ports"], ["192.168.202.11:28322:443"])
+
     def test_migration_rejects_unreviewed_services_and_missing_browser(self):
         original = self.original()
         original["services"]["another-browser"] = {"image": "protected"}
