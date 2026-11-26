@@ -16,6 +16,8 @@ This wrapper invokes the existing `python3 scripts/release.py publish` increment
 
 **TN's native single-port entry is `https://192.168.202.11:22222/manage/`, using the existing `rooms.env` Owner credentials.** HTTPS/WSS, TURN/TLS and Agent CDP share **22222/tcp**; the private CA must be trusted explicitly. Existing `work`, `8YsdUZRc` and its copy retain their actual direct mode, containers and old ports; the default `neko/cdp-proxy` retains **28320/28321** and **UDP52100–52110**. App updates recreate those default App services, not the external room browsers. Initial single-port migration is separate from routine image updates. The authorized NAS is `.202.11`; `truenas.lan` resolves to a different host at `.201.11` and must not be used for this migration. The single-port instructions below accept a DNS name or literal IP, including `APP_HOST=192.168.202.11` with blank `TURN_HOST`. DNS is not a migration prerequisite. Chromium supports IP TURN/TLS with a trusted IP SAN; Firefox rejects numeric `turns:` URLs before TLS, but IP HTTPS and direct ICE remain usable.
 
+Current LAN acceptance used isolated Chromium with strict CA validation: native 1920×1080 video, a selected client `relay` / `relayProtocol=tls` under normal ICE `all`, and unmodified Playwright CDP all through **22222/tcp**. The owned test room, Profile and key were removed. **28322** is closed; the certificate was reused rather than reissued for the new port. This is LAN proof, not WAN-forwarding acceptance.
+
 To apply an already published Manager on TN itself:
 
 ```sh
@@ -70,7 +72,7 @@ The script generates **`/mnt/ylangsPool/appdata/neko/native-relay/neko.compose.y
 
 ### Approved one-time topology migration through the same publisher
 
-Before any update, privately save `app.config`, actual installed YAML, original env/auth files, container IDs/start times/init and Chromium PIDs/mounts, and data-root inode/ownership. Copy the default browser's entire **unmounted** `/home/neko/.local/share/pki/nssdb` directory into that backup without inspecting its contents; writable-layer certificate trust otherwise disappears on recreation. Record a restore procedure for an approved stop/copy/start window, never overwrite a live NSS database.
+Before any update, privately save `app.config`, actual installed YAML, original env/auth files, container IDs/start times/init and Chromium PIDs/mounts, and data-root inode/ownership. Copy the default browser's entire **unmounted** `/home/neko/.local/share/pki/nssdb` directory into that backup without inspecting its contents; writable-layer certificate trust otherwise disappears on recreation. Record a restore procedure for an approved stop/copy/start window, never overwrite a live NSS database. Restore into the existing stopped container and start that same container; TN's App-level start can force-recreate it again and discard restored writable-layer data. Retain both the original backup and any newer NSS directory copy.
 
 On TN, convert the generated YAML to JSON **without resolving env files** (TN already bundles `yaml`):
 
