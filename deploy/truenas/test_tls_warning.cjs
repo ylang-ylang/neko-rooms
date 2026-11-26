@@ -2,7 +2,7 @@ const test=require('node:test'),assert=require('node:assert/strict'),vm=require(
 const code=fs.readFileSync(__dirname+'/tls-warning.js','utf8');
 const turn='turns:neko.example:8443?transport=tcp';
 const cfg={iceServers:[{urls:[turn],username:'kept',credential:'kept'}],iceTransportPolicy:'all'};
-function fixture(protocol='https:',dataset={}) {
+function fixture(protocol='https:',dataset={},opts={}) {
   class Node {
     constructor(tag){this.tagName=tag;this.children=[];this.attributes={};this.style={};this.events={};}
     setAttribute(k,v){this.attributes[k]=v;}
@@ -10,11 +10,16 @@ function fixture(protocol='https:',dataset={}) {
     append(...nodes){for(const n of nodes){n.parent=this;this.children.push(n);}}
     remove(){this.parent.children=this.parent.children.filter(x=>x!==this);}
   }
+  const peers=[];
   class Peer {
     static generateCertificate(){return 'native-static';}
-    constructor(config){this.config=config;this.events={};this.connectionState='new';this.iceConnectionState='new';}
+    constructor(config){this.config=config;this.events={};this.connectionState='new';this.iceConnectionState='new';this.closed=false;peers.push(this);}
     setConfiguration(config){this.config=config;return 'native-result';}
     getConfiguration(){return this.config;}
+    createDataChannel(){return {};}
+    createOffer(){return Promise.resolve({type:'offer',sdp:''});}
+    setLocalDescription(){return Promise.resolve();}
+    close(){this.closed=true;}
     addEventListener(k,v){(this.events[k]||=[]).push(v);}
     emit(k,v={}){for(const f of this.events[k]||[])f(v);}
   }
@@ -22,9 +27,10 @@ function fixture(protocol='https:',dataset={}) {
   const document={body,documentElement:body,currentScript:{dataset},createElement:tag=>new Node(tag),addEventListener:(k,v)=>events[k]=v};
   const location={protocol,host:'neko.example:8443',hostname:'neko.example',origin:protocol+'//neko.example:8443',href:protocol+'//neko.example:8443/room/test/'};
   const window={RTCPeerConnection:Peer,location};
-  const sandbox=vm.createContext({window,document,location,navigator:{userAgent:'Chrome'},URL,setTimeout:(f,ms)=>{timers.set(++id,{f,ms});return id;},clearTimeout:id=>timers.delete(id)});vm.runInContext(code,sandbox);
+  const navigator={userAgent:opts.userAgent||'Chrome',serviceWorker:opts.serviceWorker};
+  const sandbox=vm.createContext({window,document,location,navigator,URL,setTimeout:(f,ms)=>{timers.set(++id,{f,ms});return id;},clearTimeout:id=>timers.delete(id)});vm.runInContext(code,sandbox);
   const flatten=n=>[n,...n.children.flatMap(flatten)];
-  return {Peer,window,body,events,timers,sandbox,flush(){for(const[id,{f}]of[...timers]){timers.delete(id);f();}},nodes(){return flatten(body);},text(){return flatten(body).map(x=>x.textContent||'').join(' ');},banner(){return body.children.find(x=>'data-neko-tls-warning'in x.attributes);},pill(){return body.children.find(x=>'data-neko-tls-warning-pill'in x.attributes);}};
+  return {Peer,peers,window,body,events,timers,sandbox,flush(){for(const[id,{f}]of[...timers]){timers.delete(id);f();}},nodes(){return flatten(body);},text(){return flatten(body).map(x=>x.textContent||'').join(' ');},banner(){return body.children.find(x=>'data-neko-tls-warning'in x.attributes);},pill(){return body.children.find(x=>'data-neko-tls-warning-pill'in x.attributes);}};
 }
 const fail=p=>p.emit('icecandidateerror',{url:turn,errorCode:701,errorText:'Failed to establish connection'});
 test('HTTP never wraps or installs warning listeners',()=>{const f=fixture('http:');assert.equal(f.window.RTCPeerConnection,f.Peer);assert.deepEqual(Object.keys(f.events),[]);});
@@ -38,5 +44,5 @@ test('native config, return value and static API remain untouched',()=>{const f=
 test('removing TURNS cancels obsolete failure help',()=>{const f=fixture(),p=new f.window.RTCPeerConnection(cfg);fail(p);p.setConfiguration({iceServers:[]});f.flush();assert.equal(f.banner(),undefined);});
 test('dismissal collapses to a persistent yellow pill, re-opens on click, and clears once connected',()=>{const f=fixture(),p=new f.window.RTCPeerConnection(cfg);fail(p);f.flush();let stopped=false;f.events.keydown({target:{closest:()=>f.banner()},stopImmediatePropagation:()=>stopped=true});assert.equal(stopped,true);f.nodes().find(n=>n.attributes['aria-label']==='Dismiss TURN/TLS warning').events.click();assert.equal(f.banner(),undefined);assert.ok(f.pill());fail(p);f.flush();assert.equal(f.banner(),undefined);assert.ok(f.pill());f.pill().events.click();assert.ok(f.banner());assert.equal(f.pill(),undefined);f.nodes().find(n=>n.attributes['aria-label']==='Dismiss TURN/TLS warning').events.click();assert.ok(f.pill());p.emit('icecandidate',{candidate:{type:'relay'}});assert.equal(f.banner(),undefined);assert.equal(f.pill(),undefined);});
 
-test('manage surface shows immediate CA notice, universal Linux/macOS/Windows CLI commands, and collapses to yellow pill',()=>{const f=fixture('https:',{surface:'manage',caUrl:'/ca.crt'});assert.ok(f.banner());assert.match(f.text(),/Private CA required for HTTPS room video/);assert.match(f.text(),/http:\/\/neko\.example:8443\/ca\.crt/);assert.match(f.text(),/trust anchor --store/);assert.match(f.text(),/install -D -m 644/);assert.match(f.text(),/\.config\/mozilla\/firefox\/\*\/cert9\.db/);assert.match(f.text(),/Restart running browser\(s\)/);assert.match(f.text(),/\.var\/app\/\*\/config\/pki\/nssdb/);assert.ok(f.nodes().some(n=>n.attributes['data-neko-copy-ca-cmd']!==undefined));assert.ok(f.nodes().some(n=>n.href==='https://neko.example:8443/ca.crt'));f.nodes().find(n=>n.attributes['aria-label']==='Dismiss TURN/TLS warning').events.click();assert.equal(f.banner(),undefined);assert.ok(f.pill());f.pill().events.click();assert.ok(f.banner());const noCa=fixture('https:',{surface:'manage',caUrl:''});assert.equal(noCa.banner(),undefined);assert.equal(noCa.pill(),undefined);const plain=fixture('http:',{surface:'manage',caUrl:'/ca.crt'});assert.equal(plain.banner(),undefined);assert.equal(plain.pill(),undefined);});
+test('manage surface probes CA trust: silent on 401 (trusted), warns on 701 or SW SecurityError (untrusted)',()=>{const trusted=fixture('https:',{surface:'manage',caUrl:'/ca.crt',turnUrl:turn});assert.equal(trusted.peers.length,1);trusted.peers[0].emit('icecandidateerror',{url:turn,errorCode:401,errorText:'Unauthorized.'});trusted.flush();assert.equal(trusted.banner(),undefined);assert.equal(trusted.pill(),undefined);assert.equal(trusted.peers[0].closed,true);const untrusted=fixture('https:',{surface:'manage',caUrl:'/ca.crt',turnUrl:turn});untrusted.peers[0].emit('icecandidateerror',{url:turn,errorCode:701,errorText:'Failed to establish connection'});untrusted.flush();assert.ok(untrusted.banner());assert.match(untrusted.text(),/Private CA required for HTTPS room video/);assert.match(untrusted.text(),/http:\/\/neko\.example:8443\/ca\.crt/);assert.match(untrusted.text(),/trust anchor --store/);assert.match(untrusted.text(),/install -D -m 644/);assert.match(untrusted.text(),/\.config\/mozilla\/firefox\/\*\/cert9\.db/);assert.match(untrusted.text(),/Restart running browser\(s\)/);assert.match(untrusted.text(),/\.var\/app\/\*\/config\/pki\/nssdb/);assert.ok(untrusted.nodes().some(n=>n.attributes['data-neko-copy-ca-cmd']!==undefined));assert.ok(untrusted.nodes().some(n=>n.href==='https://neko.example:8443/ca.crt'));untrusted.nodes().find(n=>n.attributes['aria-label']==='Dismiss TURN/TLS warning').events.click();assert.equal(untrusted.banner(),undefined);assert.ok(untrusted.pill());untrusted.pill().events.click();assert.ok(untrusted.banner());const ffIp=fixture('https:',{surface:'manage',caUrl:'/ca.crt',turnUrl:'turns:192.168.202.11:22222?transport=tcp'},{userAgent:'Mozilla/5.0 Firefox/153.0'});assert.equal(ffIp.peers.length,0);assert.equal(ffIp.banner(),undefined);const noCa=fixture('https:',{surface:'manage',caUrl:''});assert.equal(noCa.banner(),undefined);assert.equal(noCa.pill(),undefined);const plain=fixture('http:',{surface:'manage',caUrl:'/ca.crt'});assert.equal(plain.banner(),undefined);assert.equal(plain.pill(),undefined);});
 test('TLS watcher sees the preferred URL after retained-room transport rewrite',()=>{const f=fixture();const previous=turn.replace('turns:','turn:');const shim=fs.readFileSync(__dirname+'/room-ice.js.template','utf8').replace('@TURN_URL_JSON@',JSON.stringify(turn)).replace('@PREVIOUS_TURN_URL_JSON@',JSON.stringify(previous));vm.runInContext(shim,f.sandbox);const original={iceServers:[{urls:[previous],username:'kept',credential:'kept'}]};const p=new f.window.RTCPeerConnection(original);assert.equal(p.getConfiguration().iceServers[0].urls[0],turn);assert.equal(original.iceServers[0].urls[0],previous);fail(p);f.flush();assert.ok(f.banner());const nginx=fs.readFileSync(__dirname+'/nginx.conf.template','utf8');assert.ok(nginx.indexOf('src="/.neko/tls-warning.js"')<nginx.indexOf('src="/.neko/room-ice.js"'));});

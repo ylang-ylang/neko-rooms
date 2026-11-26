@@ -140,10 +140,14 @@
     if (event.target.closest && event.target.closest('[data-neko-tls-warning],[data-neko-tls-warning-pill]')) event.stopImmediatePropagation();
   }, true);
   if (surface === 'manage') {
-    let alreadyDismissed = false;
-    try { alreadyDismissed = localStorage.getItem(dismissKey) === '1'; } catch {}
-    if (caPath) {
-      const initState = {firefoxIP: /Firefox\//.test(navigator.userAgent) && /^(?:\[|\d+\.\d+\.\d+\.\d+$)/.test(location.hostname || '')};
+    if (!caPath) return;
+    const turnUrl = options.turnUrl || ('turns:' + (location.host || '') + '?transport=tcp');
+    const firefoxIP = /Firefox\//.test(navigator.userAgent || '') && /^turns:(?:\[|\d+\.\d+\.\d+\.\d+(?::|\?))/i.test(turnUrl);
+    if (firefoxIP) return;
+    const initState = {firefoxIP: false};
+    const reportUntrusted = () => {
+      let alreadyDismissed = false;
+      try { alreadyDismissed = localStorage.getItem(dismissKey) === '1'; } catch {}
       const mount = () => {
         if (alreadyDismissed) { dismissed = true; showPill(initState); }
         else show(initState);
@@ -153,6 +157,54 @@
       } else {
         mount();
       }
+    };
+    let settled = false;
+    const finish = trusted => {
+      if (settled) return;
+      settled = true;
+      if (trusted) {
+        try { localStorage.removeItem(dismissKey); } catch {}
+        hide();
+      } else {
+        reportUntrusted();
+      }
+    };
+    if (navigator.serviceWorker && typeof navigator.serviceWorker.register === 'function') {
+      try {
+        navigator.serviceWorker.register('/.neko/tls-warning.js', {scope: '/.neko/'}).then(
+          reg => { if (reg && reg.unregister) reg.unregister().catch(() => {}); },
+          err => { if (err && err.name === 'SecurityError') finish(false); }
+        );
+      } catch (err) {
+        if (err && err.name === 'SecurityError') finish(false);
+      }
+    }
+    if (/^turns:/i.test(turnUrl) && !settled) {
+      try {
+        const pc = new Native({
+          iceServers: [{urls: [turnUrl], username: 'probe', credential: 'probe'}],
+          iceTransportPolicy: 'relay',
+        });
+        let sawTlsFail = false;
+        const done = trusted => {
+          clearTimeout(timer);
+          try { pc.close(); } catch {}
+          finish(trusted);
+        };
+        const timer = setTimeout(() => done(!sawTlsFail), 3000);
+        pc.addEventListener('icecandidateerror', event => {
+          if (event.errorCode === 401 || event.errorCode === 438) return done(true);
+          if (event.errorCode === 701 || /certificate|handshake|\bTLS\b|\bSSL\b/i.test(event.errorText || '')) {
+            sawTlsFail = true;
+          }
+        });
+        if (typeof pc.createDataChannel === 'function') pc.createDataChannel('ca-probe');
+        if (typeof pc.createOffer === 'function' && typeof pc.setLocalDescription === 'function') {
+          pc.createOffer().then(offer => pc.setLocalDescription(offer)).catch(() => done(true));
+        } else {
+          clearTimeout(timer);
+        }
+      } catch {}
     }
     return;
   }

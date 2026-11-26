@@ -370,7 +370,7 @@ def configure(settings, app_dir=APP_DIR, dev_ca=False, public=False, renew=False
     turn_scheme = "turn" if values["TRANSPORT"] == "plain" else "turns"
     turn_authority = f"{url_host(values['TURN_HOST'])}:{values['PUBLIC_PORT']}?transport=tcp"
     turn_url = turn_scheme + ":" + turn_authority
-    values.update(TURN_URL_JSON=json.dumps(turn_url), PREVIOUS_TURN_URL_JSON=json.dumps(("turns" if turn_scheme == "turn" else "turn") + ":" + turn_authority))
+    values.update(TURN_URL=turn_url, TURN_URL_JSON=json.dumps(turn_url), PREVIOUS_TURN_URL_JSON=json.dumps(("turns" if turn_scheme == "turn" else "turn") + ":" + turn_authority))
     ice = json.dumps([{"urls": [turn_url],
                        "username": saved["username"], "credential": saved["password"]}], separators=(",", ":"))
     private_write(state, "relay.env", "NEKO_ROOMS_RELAY_ICE_SERVERS_FRONTEND=" + ice + "\n")
