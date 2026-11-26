@@ -188,7 +188,7 @@ func (manager *RoomManagerCtx) Clone(ctx context.Context, id, name string) (entr
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	if err := manager.start(ctx, targetID); err != nil {
+	if err := manager.startWithProfile(ctx, targetID, true); err != nil {
 		return nil, errors.New("failed to start clone container")
 	}
 	entry, err = manager.GetEntry(ctx, targetID)

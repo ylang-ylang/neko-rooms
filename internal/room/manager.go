@@ -1126,6 +1126,12 @@ func (manager *RoomManagerCtx) Start(ctx context.Context, id string) error {
 }
 
 func (manager *RoomManagerCtx) start(ctx context.Context, id string) error {
+	return manager.startWithProfile(ctx, id, false)
+}
+
+// Live clones require a complete buffered-state replay. Ordinary deployments
+// must stay available even if their optional checkpoint cannot be replayed.
+func (manager *RoomManagerCtx) startWithProfile(ctx context.Context, id string, requireCheckpoint bool) error {
 	registry, err := manager.reconcileProfiles(ctx)
 	if err != nil {
 		return err
@@ -1148,12 +1154,14 @@ func (manager *RoomManagerCtx) start(ctx context.Context, id string) error {
 		return err
 	}
 	if err := manager.restoreProfile(ctx, id, profile); err != nil {
-		cleanup, cancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
-		defer cancel()
-		if stopErr := manager.client.ContainerStop(cleanup, id, dockerContainer.StopOptions{Signal: "SIGTERM", Timeout: &manager.config.StopTimeoutSec}); stopErr != nil {
-			return errors.Join(err, errors.New("cannot stop deployment after profile restoration failed"))
+		if requireCheckpoint {
+			return fmt.Errorf("restore persistent profile identity: %w", err)
 		}
-		return fmt.Errorf("restore persistent profile identity: %w", err)
+		// Mounted profile files remain the primary durable identity. A buffered
+		// state supplement must not terminate an otherwise healthy browser.
+		// restoreProfile retains its private checkpoint on failure for recovery.
+		manager.logger.Warn().Str("id", id).Err(err).
+			Msg("persistent profile checkpoint restoration failed; deployment remains running and checkpoint retained")
 	}
 	return nil
 }

@@ -1,6 +1,7 @@
 package room
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -8,6 +9,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/rs/zerolog"
 
 	"github.com/m1k1o/neko-rooms/internal/config"
 	"github.com/m1k1o/neko-rooms/internal/types"
@@ -172,5 +175,60 @@ func TestProfileCheckpointIsPrivateAndRegistryContainsOnlyOwnership(t *testing.T
 	}
 	if _, err := os.Stat(checkpoint); !errors.Is(err, os.ErrNotExist) {
 		t.Fatal("restored checkpoint was not consumed")
+	}
+}
+
+func TestOptionalProfileRestoreFailureKeepsDeploymentRunning(t *testing.T) {
+	for _, strict := range []bool{false, true} {
+		t.Run(map[bool]string{false: "ordinary deployment stays available", true: "clone still requires complete replay"}[strict], func(t *testing.T) {
+			manager, fake, id, root := cloneFixture(t, config.NetworkModeDirect)
+			fake.mu.Lock()
+			for fullID, c := range fake.containers {
+				c.State.Running, c.State.Status = false, "exited"
+				fake.containers[fullID] = c
+			}
+			fake.requests = nil
+			fake.mu.Unlock()
+			checkpoint := filepath.Join(root, identityCheckpoint)
+			original := []byte("invalid-private-checkpoint")
+			if err := os.WriteFile(checkpoint, original, 0600); err != nil {
+				t.Fatal(err)
+			}
+			var output bytes.Buffer
+			manager.logger = zerolog.New(&output)
+			var err error
+			if strict {
+				err = manager.startWithProfile(context.Background(), id, true)
+			} else {
+				err = manager.Start(context.Background(), id)
+			}
+			if (err != nil) != strict {
+				t.Fatalf("unexpected restoration policy: %v", err)
+			}
+			fake.mu.Lock()
+			for _, request := range fake.requests {
+				if strings.HasSuffix(request, "/stop") || strings.HasPrefix(request, "DELETE") {
+					t.Fatal("optional replay killed a healthy deployment")
+				}
+			}
+			for _, c := range fake.containers {
+				if !c.State.Running {
+					t.Fatal("browser did not remain running")
+				}
+			}
+			fake.mu.Unlock()
+			if data, _ := os.ReadFile(checkpoint); !bytes.Equal(data, original) {
+				t.Fatal("failed checkpoint was changed or discarded")
+			}
+			if data, _ := os.ReadFile(filepath.Join(root, "profile/Local State")); string(data) != "opaque profile identity" {
+				t.Fatal("mounted identity changed")
+			}
+			if !strict && !strings.Contains(output.String(), "deployment remains running and checkpoint retained") {
+				t.Fatal("degraded restoration was not reported")
+			}
+			if strings.Contains(output.String(), string(original)) {
+				t.Fatal("warning leaked private checkpoint data")
+			}
+		})
 	}
 }
