@@ -13,14 +13,18 @@
         </v-btn>
       </template>
 
-      <v-list>
+      <v-list max-width="min(420px, calc(100vw - 32px))">
         <v-list-item
           v-for="(neko_image, index) in nekoImages"
           :key="index"
           @click="Action(neko_image)"
+          :title="neko_image"
           link
         >
-          <v-list-item-title>{{ neko_image }}</v-list-item-title>
+          <v-list-item-content>
+            <v-list-item-title>{{ formatImage(neko_image).short }}</v-list-item-title>
+            <v-list-item-subtitle v-if="formatImage(neko_image).short !== neko_image">{{ neko_image }}</v-list-item-subtitle>
+          </v-list-item-content>
         </v-list-item>
       </v-list>
     </v-menu>
@@ -48,6 +52,7 @@
 import { Vue, Component } from 'vue-property-decorator'
 import { AxiosError } from 'axios'
 import { randomPassword } from '@/utils/random'
+import { formatNekoImage } from '@/utils/neko-image'
 
 import RoomInfo from '@/components/RoomInfo.vue'
 
@@ -63,6 +68,10 @@ export default class RoomActionBtn extends Vue {
 
   get nekoImages() {
     return this.$store.state.roomsConfig.neko_images
+  }
+
+  formatImage(image?: string) {
+    return formatNekoImage(image)
   }
 
   // eslint-disable-next-line

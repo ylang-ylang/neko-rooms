@@ -22,8 +22,13 @@ const nameRules = {}
 runInNewContext(ts.transpileModule(readFileSync(resolve(root, 'src/utils/room-name.ts'), 'utf8'), {
   compilerOptions: { ...options, module: ts.ModuleKind.CommonJS },
 }).outputText, { exports: nameRules })
+const nekoImageUtils = {}
+runInNewContext(ts.transpileModule(readFileSync(resolve(root, 'src/utils/neko-image.ts'), 'utf8'), {
+  compilerOptions: { ...options, module: ts.ModuleKind.CommonJS },
+}).outputText, { exports: nekoImageUtils })
 const mocks = {
   '@/utils/room-name': nameRules,
+  '@/utils/neko-image': nekoImageUtils,
   '@/components/RoomActionBtn.vue': action,
   '@/components/RoomInfo.vue': Vue.extend({ props: ['roomId'] }),
   '@/components/AgentAccess.vue': Vue.extend({ props: ['roomName'] }),
@@ -63,18 +68,84 @@ test('room columns keep original entries and optional max connections', () => {
   }
 })
 
-test('long names and pinned images retain full visible text and full image title', () => {
+test('formatNekoImage compacts long digest-pinned images while preserving full reference', () => {
+  const { formatNekoImage } = nekoImageUtils
+  assert.deepEqual(plain(formatNekoImage('docker.io/ylangylang/neko-chromium-cdp@sha256:96e413b7a82a0ec6043597151ce5f2183d34188aa81cc692af3365eafa1bd4e2')), {
+    name: 'neko-chromium-cdp',
+    digest: '@96e413b7',
+    short: 'neko-chromium-cdp@96e413b7',
+    full: 'docker.io/ylangylang/neko-chromium-cdp@sha256:96e413b7a82a0ec6043597151ce5f2183d34188aa81cc692af3365eafa1bd4e2',
+  })
+  assert.deepEqual(plain(formatNekoImage(pinnedImage)), {
+    name: 'chromium:3.2.0',
+    digest: '@270face8',
+    short: 'chromium:3.2.0@270face8',
+    full: pinnedImage,
+  })
+  assert.deepEqual(plain(formatNekoImage('m1k1o/neko:chromium')), {
+    name: 'neko:chromium',
+    digest: '',
+    short: 'neko:chromium',
+    full: 'm1k1o/neko:chromium',
+  })
+  assert.deepEqual(plain(formatNekoImage('localhost:5000/org/neko-firefox:dev@sha256:abcdef0123456789')), {
+    name: 'neko-firefox:dev',
+    digest: '@abcdef01',
+    short: 'neko-firefox:dev@abcdef01',
+    full: 'localhost:5000/org/neko-firefox:dev@sha256:abcdef0123456789',
+  })
+  assert.deepEqual(plain(formatNekoImage('sha256:96e413b7a82a0ec6043597151ce5f2183d34188aa81cc692af3365eafa1bd4e2')), {
+    name: 'sha256:96e413b7',
+    digest: '',
+    short: 'sha256:96e413b7',
+    full: 'sha256:96e413b7a82a0ec6043597151ce5f2183d34188aa81cc692af3365eafa1bd4e2',
+  })
+  assert.deepEqual(plain(formatNekoImage('user@host/org/neko:latest')), {
+    name: 'neko:latest',
+    digest: '',
+    short: 'neko:latest',
+    full: 'user@host/org/neko:latest',
+  })
+  assert.deepEqual(plain(formatNekoImage('@sha256:96e413b7a82a0ec6043597151ce5f2183d34188aa81cc692af3365eafa1bd4e2')), {
+    name: '@96e413b7',
+    digest: '',
+    short: '@96e413b7',
+    full: '@sha256:96e413b7a82a0ec6043597151ce5f2183d34188aa81cc692af3365eafa1bd4e2',
+  })
+  assert.deepEqual(plain(formatNekoImage('  ')), { name: '', digest: '', short: '', full: '' })
+  assert.deepEqual(plain(formatNekoImage(undefined)), { name: '', digest: '', short: '', full: '' })
+})
+
+test('long names stay visible while pinned images display compact name/digest with full tooltip and aria-label', () => {
   const instance = list()
   for (const room of rooms) {
     assert.equal(text(slot(instance, 'name', room)[0]).trim(), room.name)
     const image = slot(instance, 'neko_image', room)[0]
-    const [recreate, label] = elements(image.children)
+    const [recreate, tooltip] = elements(image.children)
     assert.deepEqual(plain(recreate.componentOptions.propsData), { action: 'recreate', roomId: room.id })
-    assert.equal(text(label), pinnedImage)
-    assert.equal(label.data.attrs.title, pinnedImage)
+    assert.equal(tooltip.data.attrs.disabled, false)
+    const label = elements(tooltip.data.scopedSlots.activator({ on: {}, attrs: {} }))[0]
+    assert.equal(label.data.attrs['aria-label'], 'Neko image: ' + pinnedImage)
+    assert.equal(label.data.attrs.title, undefined)
+    const [nameEl, digestEl] = elements(label.children)
+    assert.equal(nameEl.data.staticClass, 'room-image-name')
+    assert.equal(text(nameEl), 'chromium:3.2.0')
+    assert.equal(digestEl.data.staticClass, 'room-image-digest')
+    assert.equal(text(digestEl), '@270face8')
+    assert.equal(text(elements(tooltip.children)[0]), pinnedImage)
     assert.equal(text(slot(instance, 'status', room)[0]).trim(), room.status)
     assert.equal(table(instance).data.scopedSlots['item.created']({ item: room })[0].text.trim(), 'relative ' + room.created)
   }
+  const plainRoom = { ...rooms[0], neko_image: 'm1k1o/neko:chromium' }
+  const [, plainTooltip] = elements(slot(instance, 'neko_image', plainRoom)[0].children)
+  const plainLabel = elements(plainTooltip.data.scopedSlots.activator({ on: {}, attrs: {} }))[0]
+  assert.equal(plainLabel.data.attrs['aria-label'], 'Neko image: m1k1o/neko:chromium')
+  assert.equal(elements(plainLabel.children).length, 1)
+  assert.equal(text(elements(plainLabel.children)[0]), 'neko:chromium')
+  assert.equal(text(elements(plainTooltip.children)[0]), 'm1k1o/neko:chromium')
+  const emptyRoom = { ...rooms[0], neko_image: '' }
+  const [, emptyTooltip] = elements(slot(instance, 'neko_image', emptyRoom)[0].children)
+  assert.equal(emptyTooltip.data.attrs.disabled, true)
   instance.$destroy()
 })
 
@@ -327,18 +398,20 @@ test('optional connections use compact desktop actions without shrinking targets
   assert.match(source.styles[0].content, /@media \(min-width: 600px\)\s*\{[\s\S]*\.room-actions--compact\s*\{[^}]*grid-template-columns: repeat\(3, 36px\);[^}]*width: max-content;/)
 })
 
-test('layout rules are scoped, wrap identifiers and leave mux action buttons on one line', () => {
+test('layout rules are scoped, compact image cells cleanly and leave mux action buttons on one line', () => {
   assert.deepEqual(compiler.compile(source.template.content).errors, [])
   assert.equal(source.styles.length, 1)
   assert.equal(source.styles[0].scoped, true)
   const style = source.styles[0].content
   assert.match(style, /\.room-name\s*\{[^}]*min-width:[^}]*overflow-wrap: anywhere/s)
-  assert.match(style, /\.room-image\s*\{[^}]*max-width:/s)
-  assert.match(style, /\.room-image span\s*\{[^}]*min-width: 0;[^}]*overflow-wrap: anywhere/s)
+  assert.match(style, /\.room-image\s*\{[^}]*max-width:\s*min\(13\.5rem,\s*100%\)/s)
+  assert.match(style, /@media \(min-width: 600px\)\s*\{[\s\S]*\.room-image\s*\{[^}]*min-width:\s*9\.5rem/s)
+  assert.match(style, /\.room-image-label\s*\{[^}]*text-align:\s*left/s)
+  assert.match(style, /\.room-image-name\s*\{[^}]*overflow: hidden;[^}]*text-overflow: ellipsis;[^}]*white-space: nowrap/s)
+  assert.match(style, /\.room-image-digest\s*\{[^}]*overflow: hidden;[^}]*text-overflow: ellipsis;[^}]*white-space: nowrap/s)
+  assert.match(style, /\.room-image-tooltip\s*\{[^}]*white-space: normal;[^}]*overflow-wrap: anywhere/s)
   assert.match(style, /\.room-actions\s*\{[^}]*white-space: nowrap/s)
   assert.doesNotMatch(style, /table-layout:\s*fixed/)
-  for (const selector of ['room-name', 'room-image span']) {
-    assert.doesNotMatch(style.match(new RegExp('\\.' + selector + '\\s*\\{([^}]*)\\}'))[1], /overflow:\s*hidden/)
-  }
+  assert.doesNotMatch(style.match(/\.room-name\s*\{([^}]*)\}/)[1], /overflow:\s*hidden/)
   assert.match(style, /\.room-profile-name\s*\{[^}]*overflow: hidden;[^}]*text-overflow: ellipsis;[^}]*white-space: nowrap/s)
 })

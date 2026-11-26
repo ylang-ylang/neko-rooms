@@ -261,6 +261,7 @@ test('ported room defaults keep Profile/Downloads independent across instances a
   const Component = load('src/components/RoomsCreate.vue', {
     '@/api/index': enums, '@/utils/random': { randomPassword: () => '' },
     '@/utils/room-name': load('src/utils/room-name.ts'),
+    '@/utils/neko-image': load('src/utils/neko-image.ts'),
   }).default
   const create = () => new Component({ beforeCreate() { this.$store = { state } } })
   const first = create(), second = create()
@@ -305,7 +306,7 @@ test('ported room defaults keep Profile/Downloads independent across instances a
 })
 
 test('Vue templates compile; Agent action uses room.name and lists no raw keys', () => {
-  for (const file of ['AgentAccess.vue', 'RoomsList.vue', 'RoomsCreate.vue']) {
+  for (const file of ['AgentAccess.vue', 'RoomsList.vue', 'RoomsCreate.vue', 'RoomsQuick.vue', 'Pull.vue', 'RoomInfo.vue']) {
     const source = readFileSync(resolve(root, 'src/components', file), 'utf8')
     const template = compiler.parseComponent(source).template.content
     assert.deepEqual(compiler.compile(template).errors, [], file)

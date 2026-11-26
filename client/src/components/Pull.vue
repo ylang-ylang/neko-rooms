@@ -33,7 +33,21 @@
               outlined
               hide-details
               label="Neko image"
-            ></v-select>
+              class="image-select"
+              :menu-props="{ maxWidth: 'min(552px, calc(100vw - 96px))', maxHeight: 360 }"
+            >
+              <template v-slot:selection="{ item }">
+                <span class="image-selection" :title="item">{{ formatImage(item).short }}</span>
+              </template>
+              <template v-slot:item="{ item, attrs, on }">
+                <v-list-item v-bind="attrs" v-on="on" :title="item">
+                  <v-list-item-content>
+                    <v-list-item-title>{{ formatImage(item).short }}</v-list-item-title>
+                    <v-list-item-subtitle v-if="formatImage(item).short !== item">{{ item }}</v-list-item-subtitle>
+                  </v-list-item-content>
+                </v-list-item>
+              </template>
+            </v-select>
             <v-btn color="green" class="ml-2" :loading="loading" @click="Start">
               Start
             </v-btn>
@@ -54,6 +68,7 @@
 <script lang="ts">
 import { Vue, Component } from 'vue-property-decorator'
 import { AxiosError } from 'axios'
+import { formatNekoImage } from '@/utils/neko-image'
 
 @Component
 export default class Pull extends Vue {
@@ -67,6 +82,10 @@ export default class Pull extends Vue {
 
   get nekoImages() {
     return this.$store.state.roomsConfig.neko_images
+  }
+
+  formatImage(image?: string) {
+    return formatNekoImage(image)
   }
 
   async Start() {
@@ -149,3 +168,9 @@ export default class Pull extends Vue {
   }
 }
 </script>
+
+<style scoped>
+.image-select { min-width: 0; }
+.image-select ::v-deep .v-select__selections { flex-wrap: nowrap; }
+.image-selection { min-width: 0; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+</style>

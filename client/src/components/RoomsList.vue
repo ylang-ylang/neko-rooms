@@ -37,10 +37,18 @@
       <template v-slot:[`item.neko_image`]="{ item }">
         <div class="room-image d-flex align-center">
           <RoomActionBtn action="recreate" :roomId="item.id" />
-          <span class="ml-3" :title="item.neko_image">{{ item.neko_image }}</span>
+          <v-tooltip bottom open-delay="300" :disabled="!item.neko_image">
+            <template v-slot:activator="{ on, attrs }">
+              <div v-bind="attrs" v-on="on" class="room-image-label ml-2" :aria-label="item.neko_image ? 'Neko image: ' + item.neko_image : undefined">
+                <div class="room-image-name">{{ formatImage(item.neko_image).name }}</div>
+                <div v-if="formatImage(item.neko_image).digest" class="room-image-digest">{{ formatImage(item.neko_image).digest }}</div>
+              </div>
+            </template>
+            <span class="room-image-tooltip">{{ item.neko_image }}</span>
+          </v-tooltip>
           <v-tooltip bottom open-delay="300" v-if="item.is_outdated">
             <template v-slot:activator="{ on, attrs }">
-              <v-icon v-bind="attrs" v-on="on" class="ml-2" color="warning">mdi-update</v-icon>
+              <v-icon v-bind="attrs" v-on="on" class="ml-1 flex-shrink-0" color="warning">mdi-update</v-icon>
             </template>
             <div class="text-center">This image is outdated. <br> Recreate room to update it.</div>
           </v-tooltip>
@@ -131,6 +139,7 @@ import { Vue, Component, Prop } from 'vue-property-decorator'
 import axios from 'axios'
 import { RoomEntry } from '@/api'
 import { roomNameRules } from '@/utils/room-name'
+import { formatNekoImage } from '@/utils/neko-image'
 import RoomInfo from '@/components/RoomInfo.vue'
 import RoomActionBtn from '@/components/RoomActionBtn.vue'
 import AgentAccess from '@/components/AgentAccess.vue'
@@ -253,6 +262,10 @@ export default class RoomsList extends Vue {
     return this.$store.state.rooms
   }
 
+  formatImage(image?: string) {
+    return formatNekoImage(image)
+  }
+
   async Reload(roomId: string) {
     Vue.set(this, 'roomLoading', [roomId, ...this.roomLoading])
 
@@ -279,17 +292,44 @@ export default class RoomsList extends Vue {
 .room-profile ::v-deep .v-chip__content { min-width: 0; max-width: 100%; }
 .room-profile-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .room-image {
-  min-width: 12rem;
-  max-width: 24rem;
-}
-.room-image span {
   min-width: 0;
+  max-width: min(13.5rem, 100%);
+}
+.room-image-label {
+  min-width: 0;
+  flex: 1 1 auto;
+  overflow: hidden;
+  text-align: left;
+  cursor: default;
+}
+.room-image-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  line-height: 1.3;
+}
+.room-image-digest {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: monospace;
+  font-size: 0.75rem;
+  line-height: 1.25;
+  opacity: 0.72;
+}
+.room-image-tooltip {
+  display: block;
+  max-width: min(440px, calc(100vw - 48px));
+  white-space: normal;
   overflow-wrap: anywhere;
 }
 .room-actions {
   white-space: nowrap;
 }
 @media (min-width: 600px) {
+  .room-image {
+    min-width: 9.5rem;
+  }
   /* The optional connections column needs a narrower action cell, not smaller targets. */
   .room-actions--compact {
     display: grid;

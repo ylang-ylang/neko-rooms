@@ -10,7 +10,7 @@
         lazy-validation
       >
         <v-row align="center">
-          <v-col class="pb-0">
+          <v-col cols="12" sm="6" class="pb-0">
             <v-text-field
               label="Name"
               v-model="data.name"
@@ -20,12 +20,26 @@
               persistent-hint
             ></v-text-field>
           </v-col>
-          <v-col class="pb-0">
+          <v-col cols="12" sm="6" class="pb-0">
             <v-select
               label="Neko image"
               :items="nekoImages"
               v-model="data.neko_image"
-            ></v-select>
+              class="image-select"
+              :menu-props="{ maxWidth: 'min(552px, calc(100vw - 96px))', maxHeight: 360 }"
+            >
+              <template v-slot:selection="{ item }">
+                <span class="profile-selection" :title="item">{{ formatImage(item).short }}</span>
+              </template>
+              <template v-slot:item="{ item, attrs, on }">
+                <v-list-item v-bind="attrs" v-on="on" class="profile-option" :title="item">
+                  <v-list-item-content>
+                    <div class="profile-option-name">{{ formatImage(item).short }}</div>
+                    <div v-if="formatImage(item).short !== item" class="profile-option-detail">{{ item }}</div>
+                  </v-list-item-content>
+                </v-list-item>
+              </template>
+            </v-select>
           </v-col>
         </v-row>
 
@@ -569,6 +583,7 @@ import { Vue, Component, Ref } from 'vue-property-decorator'
 import { AxiosError } from 'axios'
 import { randomPassword } from '@/utils/random'
 import { roomNameRules } from '@/utils/room-name'
+import { formatNekoImage } from '@/utils/neko-image'
 
 import {
   RoomSettings,
@@ -633,6 +648,10 @@ export default class RoomsCreate extends Vue {
 
   get nekoImages() {
     return this.$store.state.roomsConfig.neko_images
+  }
+
+  formatImage(image?: string) {
+    return formatNekoImage(image)
   }
 
   get storageEnabled() {
@@ -890,6 +909,8 @@ export default class RoomsCreate extends Vue {
 
 <style scoped>
 .browser-profile-select { margin-top: 24px; }
+.image-select ::v-deep .v-select__selections,
+.browser-profile-select ::v-deep .v-select__selections { flex-wrap: nowrap; }
 .profile-selection { min-width: 0; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .profile-option { min-width: 0; }
 .profile-option-name { white-space: nowrap; line-height: 1.4; overflow: hidden; text-overflow: ellipsis; font-weight: 500; }
