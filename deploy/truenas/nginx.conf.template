@@ -48,6 +48,7 @@ stream {
 }
 
 http {
+    server_tokens off;
     # Never log query strings, credentials, Authorization or cookies.
     log_format relay '$request_method $uri $status';
     access_log /dev/stdout relay;
@@ -57,6 +58,16 @@ http {
     map $http_upgrade $connection_upgrade { default upgrade; '' close; }
     map $http_host $valid_host { default 0; "@PUBLIC_AUTHORITY@" 1; }
     map $http_host $valid_http_host { default 0; "@HTTP_AUTHORITY@" 1; }
+    # Rate-limit POST login submissions only; GET login pages stay unaffected.
+    # Behind stream/HAProxy (without PROXY protocol) $binary_remote_addr is per-listener;
+    # separate zones ensure room login spam cannot lock out Owner /manage/auth/login.
+    map $request_method $neko_login_key {
+        POST $binary_remote_addr;
+        default "";
+    }
+    limit_req_zone $neko_login_key zone=neko_manage_login:10m rate=10r/m;
+    limit_req_zone $neko_login_key zone=neko_room_login:10m rate=10r/m;
+    limit_req_status 429;
     server {
         # Reachable only on the private bridge from classifier:3480, never host-published.
         listen 8083;
@@ -79,6 +90,10 @@ http {
         if ($valid_host = 0) { return 421; }
         absolute_redirect off;
         client_max_body_size 100m;
+        @HSTS_HEADER@
+        # same-origin prevents cross-origin referrer leaks while preserving same-origin
+        # Origin/Referer required by Owner POST form CSRF checks (no-referrer sends Origin: null).
+        add_header Referrer-Policy "same-origin" always;
 
         set $manager http://neko-rooms:8080;
         proxy_http_version 1.1;
@@ -87,7 +102,7 @@ http {
         # Both listeners carry public HTTPS; :8082 must not report its local
         # cleartext $scheme to Manager (Owner Origin and Secure cookies).
         proxy_set_header X-Forwarded-Proto https;
-        proxy_set_header X-Forwarded-Port @PUBLIC_PORT@;
+        proxy_set_header X-Forwarded-Port @EXTERNAL_PORT@;
         proxy_set_header X-Forwarded-For $remote_addr;
         proxy_set_header X-Real-IP $remote_addr;
         proxy_set_header Forwarded "";
@@ -103,17 +118,42 @@ http {
         proxy_redirect off;
 
         @DEV_CA_LOCATION@
-        location = /.neko/tls-warning.js { alias /run/relay/public/tls-warning.js; default_type application/javascript; add_header Cache-Control "no-store" always; }
+        location = /.neko/tls-warning.js {
+            alias /run/relay/public/tls-warning.js;
+            default_type application/javascript;
+            @HSTS_HEADER@
+            add_header Referrer-Policy "same-origin" always;
+            add_header Cache-Control "no-store" always;
+        }
         location = / { return 302 /manage/; }
         location = /manage { return 308 /manage/; }
+        location = /manage/auth/login {
+            limit_req zone=neko_manage_login burst=15 nodelay;
+            proxy_pass $manager$request_uri;
+        }
         # Manager owns the original viewer/signaling and separate Owner/Agent auth.
         location /manage/ {
             sub_filter_once on;
             sub_filter '<head>' '<head><script src="/.neko/tls-warning.js" data-ca-url="@TLS_WARNING_CA_URL@" data-http-url="@HTTP_FALLBACK_URL@" data-turn-url="@TURN_URL@" data-surface="manage"></script>';
             proxy_pass $manager$request_uri;
         }
-        location = /.neko/room-ice.js { alias /run/relay/room-ice.js; default_type application/javascript; add_header Cache-Control "no-store" always; }
+        location = /.neko/room-ice.js {
+            alias /run/relay/room-ice.js;
+            default_type application/javascript;
+            @HSTS_HEADER@
+            add_header Referrer-Policy "same-origin" always;
+            add_header Cache-Control "no-store" always;
+        }
+        location ~ ^/room/[^/]+/api/login$ {
+            limit_req zone=neko_room_login burst=15 nodelay;
+            @HSTS_HEADER@
+            add_header Referrer-Policy "same-origin" always;
+            add_header Cache-Control "no-store" always;
+            proxy_pass $manager$request_uri;
+        }
         location /room/ {
+            @HSTS_HEADER@
+            add_header Referrer-Policy "same-origin" always;
             add_header Cache-Control "no-store" always;
             sub_filter_once on;
             sub_filter '<head>' '<head><script src="/.neko/tls-warning.js" data-ca-url="@TLS_WARNING_CA_URL@" data-http-url="@HTTP_FALLBACK_URL@"></script><script src="/.neko/room-ice.js"></script>';

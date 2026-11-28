@@ -69,6 +69,24 @@ func (manager *RoomManagerCtx) Clone(ctx context.Context, id, name string) (entr
 		settings.Hostname = ""
 	}
 	settings.Name = name
+	// Never inherit source room credentials onto a cloned deployment; always rotate
+	// to fresh distinct CSPRNG passwords.
+	userPass, err := utils.GeneratePassword(utils.RoomPasswordLength)
+	if err != nil {
+		return nil, errors.New("cannot generate cloned room user password")
+	}
+	var adminPass string
+	for {
+		adminPass, err = utils.GeneratePassword(utils.RoomPasswordLength)
+		if err != nil {
+			return nil, errors.New("cannot generate cloned room admin password")
+		}
+		if adminPass != userPass {
+			break
+		}
+	}
+	settings.UserPass = userPass
+	settings.AdminPass = adminPass
 	if err := manager.ValidateSettings(ctx, *settings); err != nil {
 		return nil, err
 	}

@@ -131,7 +131,17 @@ func TestClonePreservesConfigurationAndIsolatedManagedStorage(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
+			if cloned.UserPass == original.UserPass || len(cloned.UserPass) != 24 {
+				t.Fatalf("clone did not rotate user password to 24-char strong secret (len=%d)", len(cloned.UserPass))
+			}
+			if cloned.AdminPass == original.AdminPass || len(cloned.AdminPass) != 24 {
+				t.Fatalf("clone did not rotate admin password to 24-char strong secret (len=%d)", len(cloned.AdminPass))
+			}
+			if cloned.UserPass == cloned.AdminPass {
+				t.Fatal("clone generated identical user and admin passwords")
+			}
 			original.Name = "target"
+			original.UserPass, original.AdminPass = cloned.UserPass, cloned.AdminPass
 			original.ProfileID, original.ProfileName = cloned.ProfileID, cloned.ProfileName
 			if !reflect.DeepEqual(cloned, original) {
 				t.Fatal("canonical source configuration did not survive cloning")

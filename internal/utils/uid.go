@@ -7,10 +7,36 @@ import (
 )
 
 const (
-	defaultAlphabet = "0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ" // len=62
-	defaultSize     = 21
-	defaultMaskSize = 5
+	defaultAlphabet    = "0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ" // len=62
+	defaultSize        = 21
+	defaultMaskSize    = 5
+	RoomPasswordLength = 24
 )
+
+// GeneratePassword generates a URL-safe CSPRNG password using unbiased rejection sampling.
+func GeneratePassword(size int) (string, error) {
+	if size <= 0 {
+		return "", fmt.Errorf("size must be positive integer")
+	}
+	alphabetLen := len(defaultAlphabet)
+	maxUnbiased := byte((256 / alphabetLen) * alphabetLen)
+	buf := make([]byte, max(size*2, 32))
+	out := make([]byte, 0, size)
+	for len(out) < size {
+		if _, err := BytesGenerator(buf); err != nil {
+			return "", err
+		}
+		for _, b := range buf {
+			if b < maxUnbiased {
+				out = append(out, defaultAlphabet[int(b)%alphabetLen])
+				if len(out) == size {
+					return string(out), nil
+				}
+			}
+		}
+	}
+	return string(out), nil
+}
 
 // Generator function
 type Generator func([]byte) (int, error)

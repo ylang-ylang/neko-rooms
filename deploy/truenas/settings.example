@@ -8,6 +8,9 @@ TRANSPORT=plain
 APP_HOST=
 TURN_HOST=
 PUBLIC_PORT=22222
+# Optional external public port when fronted by an L4 TCP tunnel (e.g. frp 443 -> 22222).
+# Blank inherits PUBLIC_PORT. Host bind stays PUBLIC_PORT; public Origin/Host/TURN use EXTERNAL_PORT.
+EXTERNAL_PORT=
 PUBLIC_BIND_IP=192.168.202.11
 # REQUIRED: inspect the subnet of the EXISTING neko-rooms-net; never recreate it.
 ROOM_NETWORK_CIDR=

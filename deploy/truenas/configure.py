@@ -25,7 +25,8 @@ PROJECT = "ix-neko"
 MARKER = "truenas-neko-native-relay-v1\n"
 PRIVATE_RANGES = tuple(ipaddress.ip_network(c) for c in ("10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16"))
 DEFAULTS = {
-    "TRANSPORT": "plain", "APP_HOST": "", "TURN_HOST": "", "PUBLIC_PORT": "22222", "PUBLIC_BIND_IP": "192.168.202.11",
+    "TRANSPORT": "plain", "APP_HOST": "", "TURN_HOST": "", "PUBLIC_PORT": "22222", "EXTERNAL_PORT": "",
+    "PUBLIC_BIND_IP": "192.168.202.11",
     "ROOM_NETWORK_CIDR": "", "TURN_PRIVATE_IP": "auto", "TLS_CERT_FILE": "", "TLS_KEY_FILE": "",
     "MANAGER_IMAGE": "docker.io/ylangylang/neko-rooms:single-port",
     "ROOM_IMAGE": "docker.io/ylangylang/neko-chromium-cdp:single-port", "RELEASE_PULL_POLICY": "always",
@@ -129,6 +130,13 @@ def topology(values, dev_ca, public):
     if not re.fullmatch(r"[0-9]+", values["PUBLIC_PORT"]) or not 1 <= int(values["PUBLIC_PORT"]) <= 65535:
         fail("PUBLIC_PORT must be from 1 to 65535")
     values["PUBLIC_PORT"] = str(int(values["PUBLIC_PORT"]))
+    ext_raw = values.get("EXTERNAL_PORT", "")
+    if ext_raw:
+        if not re.fullmatch(r"[0-9]+", ext_raw) or not 1 <= int(ext_raw) <= 65535:
+            fail("EXTERNAL_PORT must be from 1 to 65535")
+        values["EXTERNAL_PORT"] = str(int(ext_raw))
+    else:
+        values["EXTERNAL_PORT"] = values["PUBLIC_PORT"]
     network = ipaddress.ip_network(values["ROOM_NETWORK_CIDR"], strict=True)
     if network.version != 4 or not any(network.subnet_of(p) for p in PRIVATE_RANGES):
         fail("ROOM_NETWORK_CIDR must be the existing RFC1918 IPv4 bridge subnet")
@@ -146,14 +154,17 @@ def topology(values, dev_ca, public):
         fail("--dev-ca cannot replace supplied TLS paths")
     scheme = "http" if values["TRANSPORT"] == "plain" else "https"
     default_port = "80" if scheme == "http" else "443"
-    authority = url_host(values["APP_HOST"]) + (":" + values["PUBLIC_PORT"] if values["PUBLIC_PORT"] != default_port else "")
+    ext_port = values["EXTERNAL_PORT"]
+    authority = url_host(values["APP_HOST"]) + (":" + ext_port if ext_port != default_port else "")
     values.update(PUBLIC_AUTHORITY=authority, PUBLIC_ORIGIN=scheme + "://" + authority,
-                  HTTP_AUTHORITY=url_host(values["APP_HOST"]) + (":" + values["PUBLIC_PORT"] if values["PUBLIC_PORT"] != "80" else ""),
+                  HTTP_AUTHORITY=url_host(values["APP_HOST"]) + (":" + ext_port if ext_port != "80" else ""),
                   ROOM_PEER_RANGE=f"{network.network_address + 1}-{network.broadcast_address - 1}",
                   TURN_RELAY_MIN="49160", TURN_RELAY_MAX="49259",
                   WEB_SNI_ROUTE=(values["APP_HOST"] + " 127.0.0.1:8443;" if values["APP_HOST"] != values["TURN_HOST"] else ""),
                   DEV_CA_LOCATION=("location = /ca.crt { alias /run/relay/public/ca.crt; "
-                                   "default_type application/x-x509-ca-cert; }" if dev_ca else ""))
+                                   "default_type application/x-x509-ca-cert; }" if dev_ca else ""),
+                  HSTS_HEADER=('add_header Strict-Transport-Security "max-age=31536000" always;'
+                               if (values["TRANSPORT"] == "tls" and not dev_ca and not fallback) else ""))
     return network, turn_ip
 
 
@@ -368,7 +379,7 @@ def configure(settings, app_dir=APP_DIR, dev_ca=False, public=False, renew=False
     values.update(NEKO_APP_DIR=str(app_dir), RELAY_STATE_DIR=str(state), TLS_CERT_FILE=str(cert) if cert else "", TLS_KEY_FILE=str(key) if key else "",
                   TURN_USERNAME=saved["username"], TURN_PASSWORD=saved["password"])
     turn_scheme = "turn" if values["TRANSPORT"] == "plain" else "turns"
-    turn_authority = f"{url_host(values['TURN_HOST'])}:{values['PUBLIC_PORT']}?transport=tcp"
+    turn_authority = f"{url_host(values['TURN_HOST'])}:{values['EXTERNAL_PORT']}?transport=tcp"
     turn_url = turn_scheme + ":" + turn_authority
     values.update(TURN_URL=turn_url, TURN_URL_JSON=json.dumps(turn_url), PREVIOUS_TURN_URL_JSON=json.dumps(("turns" if turn_scheme == "turn" else "turn") + ":" + turn_authority))
     ice = json.dumps([{"urls": [turn_url],
@@ -389,10 +400,12 @@ def check_endpoint(settings, app_dir=APP_DIR, private_ca=False):
     # DNS may name another legitimate NAS interface or authorized WAN ingress;
     # equality with PUBLIC_BIND_IP is neither required nor proof of host identity.
     values = read_settings(settings)
-    hosts = tuple(dict.fromkeys(hostname(values[k]) for k in ("APP_HOST", "TURN_HOST")))
-    if not values["PUBLIC_PORT"].isdigit() or not 1 <= int(values["PUBLIC_PORT"]) <= 65535:
-        fail("PUBLIC_PORT must be from 1 to 65535")
-    port = int(values["PUBLIC_PORT"])
+    app_host = hostname(values["APP_HOST"])
+    hosts = tuple(dict.fromkeys((app_host, hostname(values["TURN_HOST"]))))
+    port_raw = values.get("EXTERNAL_PORT") or values["PUBLIC_PORT"]
+    if not re.fullmatch(r"[0-9]+", port_raw) or not 1 <= int(port_raw) <= 65535:
+        fail("PUBLIC_PORT/EXTERNAL_PORT must be from 1 to 65535")
+    port = int(port_raw)
     ca = absolute_path(str(app_dir), "app directory") / "native-relay/public/ca.crt" if private_ca else None
     plain = values["TRANSPORT"] == "plain"
     context = None if plain else ssl.create_default_context(cafile=str(ca) if ca else None)
@@ -404,7 +417,7 @@ def check_endpoint(settings, app_dir=APP_DIR, private_ca=False):
                 with context.wrap_socket(connection, server_hostname=host):
                     pass  # Certificate checked; no TURN allocation is claimed.
         observations.append(f"{host}:{port} DNS={','.join(addresses)} TCP" + (" verified" if plain else "/TLS verified"))
-    web = http.client.HTTPConnection(values["APP_HOST"], port, timeout=10) if plain else http.client.HTTPSConnection(values["APP_HOST"], port, timeout=10, context=context)
+    web = http.client.HTTPConnection(app_host, port, timeout=10) if plain else http.client.HTTPSConnection(app_host, port, timeout=10, context=context)
     try:
         web.request("GET", "/manage/auth/login")
         response = web.getresponse()

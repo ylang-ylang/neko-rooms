@@ -350,6 +350,25 @@ func (manager *RoomManagerCtx) create(ctx context.Context, settings types.RoomSe
 	if err != nil {
 		return "", err
 	}
+	if settings.UserPass == "" {
+		pw, err := utils.GeneratePassword(utils.RoomPasswordLength)
+		if err != nil {
+			return "", err
+		}
+		settings.UserPass = pw
+	}
+	if settings.AdminPass == "" {
+		for {
+			pw, err := utils.GeneratePassword(utils.RoomPasswordLength)
+			if err != nil {
+				return "", err
+			}
+			if pw != settings.UserPass {
+				settings.AdminPass = pw
+				break
+			}
+		}
+	}
 
 	// Profile storage identity is independent of deployment names.
 	roomName := settings.Name

@@ -284,14 +284,53 @@ class ConfigurationTests(unittest.TestCase):
         self.assertIn("default 127.0.0.1:5349;", nginx)
         self.assertIn('"" classifier:3480;', nginx)
         self.assertIn("listen 8083;", nginx)
+        self.assertIn("server_tokens off;", nginx)
+        self.assertNotIn("Strict-Transport-Security", nginx)  # dev-ca mode avoids 1-year HSTS lock-in
+        self.assertIn('add_header Referrer-Policy "same-origin" always;', nginx)
+        self.assertNotIn('Referrer-Policy "no-referrer"', nginx)
+        self.assertIn("limit_req_zone $neko_login_key zone=neko_manage_login:10m rate=10r/m;", nginx)
+        self.assertIn("limit_req_zone $neko_login_key zone=neko_room_login:10m rate=10r/m;", nginx)
+        self.assertIn("location ~ ^/room/[^/]+/api/login$ {", nginx)
+        self.assertIn("location = /manage/auth/login {", nginx)
         self.assertIn("proxy_set_header X-Forwarded-Proto https;", nginx)
         self.assertIn("proxy_set_header X-Forwarded-Port 22222;", nginx)
         self.assertIn("location /room/", nginx)
+        manage_login = nginx.split("location = /manage/auth/login {", 1)[1].split("}", 1)[0]
+        self.assertNotIn("proxy_set_header", manage_login)
+        self.assertIn("limit_req zone=neko_manage_login", manage_login)
+        self.assertNotIn("sub_filter", manage_login)
+        room_login = nginx.split("location ~ ^/room/[^/]+/api/login$ {", 1)[1].split("}", 1)[0]
+        self.assertNotIn("proxy_set_header", room_login)
+        self.assertIn("limit_req zone=neko_room_login", room_login)
         for text in ("req.proto_http", "2112a442", "reject if WAIT_END", "init-addr none", "frontend plain_entry", "bind :3480", "gateway:8083"):
             self.assertIn(text, classifier)
         for text in ("listening-ip=172.29.70.10", "no-tcp-relay", "allowed-peer-ip=172.29.70.1-172.29.70.254"):
             self.assertIn(text, turn)
         self.assertNotRegex(nginx + classifier + turn, r"@[A-Z_]+@")
+
+    def test_external_port_separates_host_bind_from_public_authority_and_turn_and_enables_hsts_for_supplied_cert(self):
+        self.values.update(APP_HOST="neko.public.test", TURN_HOST="neko.public.test", PUBLIC_PORT="22222", EXTERNAL_PORT="443")
+        self.write_settings()
+        dev_state = self.configure()
+        # Switch to supplied certificate mode (non-dev-ca) to verify HSTS is enabled.
+        self.values.update(TLS_CERT_FILE=str(dev_state / "tls/server.crt"), TLS_KEY_FILE=str(dev_state / "tls/server.key"))
+        self.write_settings()
+        state, origin = cfg.configure(self.settings, self.app, dev_ca=False, compose_template=self.compose_template)
+        self.assertEqual(origin, "https://neko.public.test")
+        services = self.model(state / "neko.compose.yaml")["services"]
+        self.assertEqual(services["gateway"]["ports"][0]["published"], "22222")
+        self.assertEqual(services["neko-rooms"]["environment"]["NEKO_ROOMS_INSTANCE_URL"], "https://neko.public.test/")
+        ice = json.loads((state / "relay.env").read_text().split("=", 1)[1])
+        self.assertEqual(ice[0]["urls"], ["turns:neko.public.test:443?transport=tcp"])
+        nginx = (state / "nginx.conf").read_text()
+        self.assertIn('"neko.public.test" 1;', nginx)
+        self.assertIn("proxy_set_header X-Forwarded-Port 443;", nginx)
+        self.assertIn('add_header Strict-Transport-Security "max-age=31536000" always;', nginx)
+        room_ice = (state / "room-ice.js").read_text()
+        self.assertIn("turns:neko.public.test:443?transport=tcp", room_ice)
+        self.assertNotIn("192.168.", room_ice)
+        with self.assertRaisesRegex(ValueError, "EXTERNAL_PORT"):
+            cfg.topology(dict(self.values, EXTERNAL_PORT="70000"), False, False)
 
     def test_postdeploy_probe_verifies_tls_without_assuming_dns_is_bind_ip(self):
         state = self.configure()
